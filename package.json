@@ -1,0 +1,31 @@
+{
+  "name": "@live2ride/db",
+  "version": "1.0.0",
+  "description": "simple mssql operations",
+  "main": "index.js",
+  "scripts": {
+    "test": "node test/test.js"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/live2ride/log.git"
+  },
+  "keywords": [
+    "log",
+    "colors"
+  ],
+  "author": "live2ride",
+  "license": "ISC",
+  "bugs": {
+    "url": "https://github.com/live2ride/db/issues"
+  },
+  "homepage": "https://github.com/live2ride/db#readme",
+  "dependencies": {
+    "@live2ride/log": "^1.0.0",
+    "lodash": "^4.17.21",
+    "mssql": "^9.0.1"
+  },
+  "directories": {
+    "test": "test"
+  }
+}
