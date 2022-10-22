@@ -1,6 +1,6 @@
 {
   "name": "@live2ride/db",
-  "version": "1.0.1",
+  "version": "1.0.3",
   "description": "simple mssql operations",
   "main": "index.js",
   "scripts": {
@@ -21,7 +21,7 @@
   },
   "homepage": "https://github.com/live2ride/db#readme",
   "dependencies": {
-    "@live2ride/log": "^1.0.0",
+    "@live2ride/log": "^1.0.2",
     "lodash": "^4.17.21",
     "mssql": "^9.0.1"
   },

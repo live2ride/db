@@ -56,8 +56,6 @@ module.exports = class DB {
       ..._config,
     };
 
-    console.log("database", this.config.database);
-
     this.tranHeader = _config.tranHeader || ""; // `SET TRANSACTION ISOLATION LEVEL READ UNCOMMITTED;  \nset nocount on; \n`;
     this.pool = null;
   }
