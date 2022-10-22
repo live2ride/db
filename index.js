@@ -33,12 +33,48 @@ function isFloat(n) {
   return !isNaN(n) && n.toString().indexOf(".") != -1;
 }
 
+function status(headers) {
+  function success(req, res, data = null) {
+    send(req, res, 200, data);
+  }
+  function error(req, res, err) {
+    const { code, message } = err || {};
+    send(req, res, code || 500, { message: message || "unknown" });
+  }
+
+  function send(req, res, code, data) {
+    if (res.headersSent) {
+      return;
+    }
+
+    res.status(code);
+    if (headers && Array.isArray(headers)) {
+      headers.forEach((h) => {
+        res.setHeader(h[0], h[1]);
+      });
+    }
+
+    res.setHeader("Content-Type", "text/json");
+
+    res.send(data);
+  }
+
+  return {
+    success,
+    error,
+  };
+}
+
 module.exports = class DB {
   constructor(_config) {
+    const { responseHeaders, errors, ...rest } = _config;
+    const isDev = ["development", "dev"].includes(process.env.NODE_ENV);
+    this.errors = {
+      print: isDev ? true : false,
+      includeInResponse: isDev ? true : false,
+      ...(errors || {}),
+    };
     this.config = {
-      printErrors: ["development", "dev"].includes(process.env.NODE_ENV)
-        ? true
-        : false,
       database: process.env.DB_DATABASE,
       user: process.env.DB_USER,
       password: process.env.DB_PASSWORD,
@@ -53,13 +89,27 @@ module.exports = class DB {
         min: 0,
         idleTimeoutMillis: 30000,
       },
-      ..._config,
+      ...rest,
     };
 
+    this.responseHeaders = responseHeaders;
     this.tranHeader = _config.tranHeader || ""; // `SET TRANSACTION ISOLATION LEVEL READ UNCOMMITTED;  \nset nocount on; \n`;
     this.pool = null;
   }
+  #reply(req, res, data = null) {
+    status(this.responseHeaders).success(req, res, data);
+  }
 
+  #errorReply(req, res, err) {
+    let badRequest = new Error("BAD_REQUEST");
+    badRequest.code = 400;
+
+    status(this.responseHeaders).error(
+      req,
+      res,
+      this.errors.includeInResponse ? err : badRequest
+    );
+  }
   async exec(qry, params = [], first_row = false) {
     if (!this.pool) {
       const conPool = await new sql.ConnectionPool(this.config);
@@ -70,7 +120,7 @@ module.exports = class DB {
     req = this.#getDBParams(req, params);
 
     try {
-      const result = await this.pool.query(this.tranHeader + qry);
+      const result = await this.pool.query(this.tranHeader + " " + qry);
 
       return this.#jsonParseData(result.recordset, first_row);
     } catch (err) {
@@ -95,7 +145,7 @@ module.exports = class DB {
         // stack: Error().stack.split("\n"),
       };
 
-      if (this.config?.printErrors) {
+      if (this.errors?.print) {
         this.#consoleLogError(info);
       }
 
@@ -116,8 +166,10 @@ module.exports = class DB {
     log.warning(" -------- ", `(db:${databse}):`, message, " -------- ");
     if (params && (params.length > 0 || Object.keys(params).length > 0)) {
       let par = params;
-      if (typeof par === "string") {
-        par = JSON.parse(par);
+      if (typeof params === "string") {
+        try {
+          par = JSON.parse(params);
+        } catch {}
       }
 
       this.printParams(par);
@@ -126,47 +178,35 @@ module.exports = class DB {
     log.warning(`****************** MSSQL ERROR end ******************`);
   }
 
-  #reply(req, res, data = null) {
-    // STATUS.success(req, res, data);
-    res.status(200);
-    res.send(data);
-  }
-  #error(req, res, err) {
-    res.status(500);
-    res.send({ message: "server error" });
-
-    if (!this.config?.printErrors) {
-      log.error(err);
-    }
-  }
-
   send(req, res, qry, params) {
     this.exec(qry, params)
-      .then((response) => {
+      .then((data) => {
         if (req.accepts("json")) {
-          this.toJSON(req, res, response);
+          this.toJSON(req, res, data);
+        } else if (req.accepts("text")) {
+          this.toTEXT(req, res, data);
         } else if (req.accepts("html")) {
-          this.toTEXT(req, res, response);
-        } else if (req.accepts("xml") || req.accepts("text")) {
-          this.toTEXT(req, res, response);
+          this.toTEXT(req, res, data);
+        } else if (req.accepts("xml")) {
+          throw "mssql feature of send function has not been implemented yet";
         } else {
-          this.toJSON(req, res, response);
+          this.toJSON(req, res, data);
         }
       })
       .catch((err) => {
-        this.#error(req, res, err);
+        this.#errorReply(req, res, err);
       });
   }
   sendQry(req, res, qry, params) {
     this.send(req, res, qry, params);
   }
-  toTEXT(req, res, response) {
-    this.#reply(req, res, response);
+  toTEXT(req, res, data) {
+    this.#reply(req, res, data);
   }
 
-  toJSON(req, res, response) {
-    let data = JSON.stringify(response);
-    this.#reply(req, res, data);
+  toJSON(req, res, data) {
+    let jsonData = JSON.stringify(data);
+    this.#reply(req, res, jsonData);
   }
 
   #jsonParseData(data, first_row) {

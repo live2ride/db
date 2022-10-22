@@ -2,18 +2,19 @@
 
 Simple way to interact with MS SQL Server(MSSQL)
 
-## Examples
+- responseHeaders:
 
 ### Config
 
 ```javascript
 const dbConfig = {
-  database: process.env.DB_DATABASE,
-  user: process.env.DB_USER,
-  password: process.env.DB_PASSWORD,
-  server: process.env.DB_SERVER,
+  database: "master",
+  user: "demo user",
+  password: "demo password",
+  server: 192.168.0.1,
 };
 const db = new DB(dbConfig);
+
 ```
 
 ##### Alternatively you can set variables in your env file
@@ -27,6 +28,51 @@ const db = new DB(dbConfig);
 }
 const db = new DB();
 ```
+
+#### Other config options
+
+**tranHeader**: transaction header. string added before each query.
+**responseHeaders**: array of headers added to response when using db.send
+**errors**:
+
+- **print**: prints errors in console with statement prepared for testing. true in development
+- **includeInResponse**: include errors in response when using db.send. true in development
+
+```javascript
+
+
+
+
+example:
+const dbConfig = {
+  tranHeader: "set nocount on;",
+  errors:{
+    print: true,
+    includeInResponse: true,
+  },
+  responseHeaders: [
+      ["Access-Control-Allow-Origin", "*"],
+      ["Access-Control-Allow-Methods", "GET, POST, OPTIONS, PUT, PATCH, DELETE"],
+  ];
+};
+```
+
+### Usage
+
+exec: executes query with parameters and returns results;
+
+```javascript
+await db.exec(
+  query: any sql statement
+  parameters: (json object) ,
+  first_row_only: default false
+    * true returns json object
+    * false returns array of objects
+    *
+)
+```
+
+## Examples
 
 ### Create table
 
