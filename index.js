@@ -56,19 +56,23 @@ module.exports = class DB {
       ..._config,
     };
 
-    // database doesnt seem to play major role so the connection defaults to default database
-    this.tranHeader = "";
-    // _config?.tranHeader ||
-    // `use ${this.config.database};  \nSET TRANSACTION ISOLATION LEVEL READ UNCOMMITTED;  \nset nocount on; \ngo \n\n`;
+    console.log("database", this.config.database);
+
+    this.tranHeader = _config.tranHeader || ""; // `SET TRANSACTION ISOLATION LEVEL READ UNCOMMITTED;  \nset nocount on; \n`;
+    this.pool = null;
   }
 
   async exec(qry, params = [], first_row = false) {
-    await sql.connect(this.config);
+    if (!this.pool) {
+      const conPool = await new sql.ConnectionPool(this.config);
+      this.pool = await conPool.connect();
+    }
+
     let req = new sql.Request();
     req = this.#getDBParams(req, params);
 
     try {
-      const result = await req.query(this.tranHeader + qry);
+      const result = await this.pool.query(this.tranHeader + qry);
 
       return this.#jsonParseData(result.recordset, first_row);
     } catch (err) {
