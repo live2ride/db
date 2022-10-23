@@ -118,11 +118,11 @@ module.exports = class DB {
       this.pool = await conPool.connect();
     }
 
-    let req = new sql.Request();
+    let req = this.pool.request();
     req = this.#getDBParams(req, params);
 
     try {
-      const result = await this.pool.query(this.tranHeader + " " + qry);
+      const result = await req.query(this.tranHeader + " " + qry);
 
       return this.#jsonParseData(result.recordset, first_row);
     } catch (err) {
