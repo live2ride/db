@@ -8,8 +8,8 @@ const map = require("lodash/map");
 class DBError extends Error {
   constructor(err) {
     super("Database error"); // (1)
-
-    this.code = err?.code;
+    this.name = "DBError";
+    this.status_code = 500;
     this.number = err?.number;
     this.state = err?.state;
     this.class = err?.class;
@@ -35,47 +35,15 @@ function isFloat(n) {
   return !isNaN(n) && n.toString().indexOf(".") != -1;
 }
 
-function status(headers) {
-  function success(req, res, data = null) {
-    send(req, res, 200, data);
-  }
-  function error(req, res, err) {
-    const { code, message } = err || {};
-    send(req, res, code || 500, { message: message || "unknown" });
-  }
-
-  function send(req, res, code, data) {
-    if (res.headersSent) {
-      return;
-    }
-
-    res.status(code);
-    if (headers && Array.isArray(headers)) {
-      headers.forEach((h) => {
-        res.setHeader(h[0], h[1]);
-      });
-    }
-
-    res.setHeader("Content-Type", "text/json");
-
-    res.send(data);
-  }
-
-  return {
-    success,
-    error,
-  };
-}
-
 module.exports = class DB {
   constructor(_config) {
     const { responseHeaders, errors, ...rest } = _config;
     const isDev = ["development", "dev"].includes(process.env.NODE_ENV);
     this.errors = {
       print: isDev ? true : false,
-      includeInResponse: isDev ? true : false,
       ...(errors || {}),
     };
+
     this.config = {
       database: process.env.DB_DATABASE,
       user: process.env.DB_USER,
@@ -87,7 +55,7 @@ module.exports = class DB {
         trustServerCertificate: false, // change to true for local dev / self-signed certs
       },
       pool: {
-        max: 10,
+        max: 100,
         min: 0,
         idleTimeoutMillis: 30000,
       },
@@ -99,19 +67,18 @@ module.exports = class DB {
     this.pool = null;
   }
   #reply(req, res, data = null) {
-    status(this.responseHeaders).success(req, res, data);
+    res.status(200);
+    if (this.responseHeaders && Array.isArray(this.responseHeaders)) {
+      this.responseHeaders.forEach((h) => {
+        res.setHeader(h[0], h[1]);
+      });
+    }
+
+    res.setHeader("Content-Type", "text/json");
+
+    res.send(data);
   }
 
-  #errorReply(req, res, err) {
-    let badRequest = new Error("BAD_REQUEST");
-    badRequest.code = 400;
-
-    status(this.responseHeaders).error(
-      req,
-      res,
-      this.errors.includeInResponse ? err : badRequest
-    );
-  }
   async exec(qry, params = [], first_row = false) {
     if (!this.pool) {
       const conPool = await new sql.ConnectionPool(this.config);
@@ -180,27 +147,23 @@ module.exports = class DB {
     log.warning(`****************** MSSQL ERROR end ******************`);
   }
 
-  send(req, res, qry, params) {
-    this.exec(qry, params)
-      .then((data) => {
-        if (req.accepts("json")) {
-          this.toJSON(req, res, data);
-        } else if (req.accepts("text")) {
-          this.toTEXT(req, res, data);
-        } else if (req.accepts("html")) {
-          this.toTEXT(req, res, data);
-        } else if (req.accepts("xml")) {
-          throw "mssql feature of send function has not been implemented yet";
-        } else {
-          this.toJSON(req, res, data);
-        }
-      })
-      .catch((err) => {
-        this.#errorReply(req, res, err);
-      });
+  async send(req, res, qry, params) {
+    const data = await this.exec(qry, params);
+
+    if (req.accepts("json")) {
+      this.toJSON(req, res, data);
+    } else if (req.accepts("text")) {
+      this.toTEXT(req, res, data);
+    } else if (req.accepts("html")) {
+      this.toTEXT(req, res, data);
+    } else if (req.accepts("xml")) {
+      throw "mssql feature of send function has not been implemented yet";
+    } else {
+      this.toJSON(req, res, data);
+    }
   }
-  sendQry(req, res, qry, params) {
-    this.send(req, res, qry, params);
+  async sendQry(req, res, qry, params) {
+    await this.send(req, res, qry, params);
   }
   toTEXT(req, res, data) {
     this.#reply(req, res, data);
