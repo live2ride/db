@@ -37,7 +37,7 @@ function isFloat(n) {
 
 module.exports = class DB {
   constructor(_config) {
-    const { responseHeaders, errors, ...rest } = _config;
+    const { responseHeaders, errors, ...rest } = _config || {};
     const isDev = ["development", "dev"].includes(process.env.NODE_ENV);
     this.errors = {
       print: isDev ? true : false,
@@ -63,7 +63,7 @@ module.exports = class DB {
     };
 
     this.responseHeaders = responseHeaders;
-    this.tranHeader = _config.tranHeader || ""; // `SET TRANSACTION ISOLATION LEVEL READ UNCOMMITTED;  \nset nocount on; \n`;
+    this.tranHeader = _config?.tranHeader || ""; // `SET TRANSACTION ISOLATION LEVEL READ UNCOMMITTED;  \nset nocount on; \n`;
     this.pool = null;
   }
   #reply(req, res, data = null) {
