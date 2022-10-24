@@ -66,6 +66,7 @@ module.exports = class DB {
     this.tranHeader = _config?.tranHeader || ""; // `SET TRANSACTION ISOLATION LEVEL READ UNCOMMITTED;  \nset nocount on; \n`;
     this.pool = null;
   }
+
   #reply(req, res, data = null) {
     res.status(200);
     if (this.responseHeaders && Array.isArray(this.responseHeaders)) {
@@ -121,7 +122,6 @@ module.exports = class DB {
       throw new DBError(info);
     }
   }
-
   #consoleLogError(props) {
     const { databse, qry, message, params, code, database } = props;
     let par = "";
@@ -147,6 +147,15 @@ module.exports = class DB {
     log.warning(`****************** MSSQL ERROR end ******************`);
   }
 
+  /**
+   * @description Executes sql statement and send results to client
+   * @param {express request} req - express request
+   * @param {express response} res - express request response
+   * @param {string} query - sql server query ex: select * from table
+   * @param {object} params - all keys are converted to sql parameters with @_ ex: select * from tbl where key = @_key, {key: 123}
+   * @returns {array} - array of objects data in array
+   * @type {any}
+   */
   async send(req, res, qry, params) {
     const data = await this.exec(qry, params);
 
@@ -322,5 +331,36 @@ module.exports = class DB {
     });
 
     log.warning(p);
+  }
+
+  #tsParam(name, type) {
+    const sqlToTsTypes = {
+      number: ["bigint", "int", "decimal", "money", "float"],
+      date: ["date", "datetime", "datetime2"],
+      string: ["char", "text", "nchar", "ntext", "varchar", "nvarchar"],
+      other: ["binary", "image"],
+    };
+    for (const [key, val] of Object.entries(sqlToTsTypes)) {
+      if (val.includes(type)) {
+        return key;
+      }
+    }
+  }
+  async tableToJSDoc(tableName) {
+    let qry = `select ordinal_position as seq, column_name, data_type 
+              from information_schema.columns 
+              where table_name = @_tableName`;
+
+    let res = await this.exec(qry, { tableName });
+
+    let po = `/** \n * @description table XYZ\n`;
+
+    let r = res.map((o) => {
+      let type = this.#tsParam(o.column_name, o.data_type);
+      po += ` * @${o.column_name} {${type}} - \n`;
+      return o;
+    });
+    po += ` * @returns {???} \n * /`;
+    console.log(po);
   }
 };
