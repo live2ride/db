@@ -1,10 +1,10 @@
 "use strict";
-import sql, {config as SQLConfig, Request as SQLRequest, pool as SQLPool} from "mssql";
+import sql  from "mssql";
 import forEach from "lodash/forEach"
 import isNumber from "lodash/isNumber"
 import map from "lodash/map"
-import { Request, Response, NextFunction } from "express";
-const log = require("@live2ride/log")
+import { Request, Response } from "express";
+// const log = require("@live2ride/log")
 
 class DBError extends Error {
 name:string
@@ -59,23 +59,13 @@ module.exports = class DB {
   responseHeaders: string
   tranHeader: string
   pool: any
-  config: any
 
-  constructor(_config: any) {
-    const { responseHeaders, errors, ...rest } = _config || {};
-    const isDev = ["development", "dev"].includes(String(process.env.NODE_ENV));
-    this.errors = {
-      print: isDev ? true : false,
-      ...(errors || {}),
-    };
-
-    this.config = {
+  config: sql.config = {
       database: process.env.DB_DATABASE,
       user: process.env.DB_USER,
       password: process.env.DB_PASSWORD,
-      server: process.env.DB_SERVER,
+      server: process.env.DB_SERVER || "",
       options: {
-        parseJSON: true,
         encrypt: false, // for azure
         trustServerCertificate: false, // change to true for local dev / self-signed certs
       },
@@ -84,15 +74,27 @@ module.exports = class DB {
         min: 0,
         idleTimeoutMillis: 30000,
       },
-      ...rest,
     };
+
+  constructor(_config: any) {
+    
+    const { responseHeaders, errors, ...rest } = _config || {};
+
+    this.config = {...this.config, ...rest}
+    const isDev = ["development", "dev"].includes(String(process.env.NODE_ENV));
+    this.errors = {
+      print: isDev ? true : false,
+      ...(errors || {}),
+    };
+
+    
 
     this.responseHeaders = responseHeaders;
     this.tranHeader = _config?.tranHeader || ""; // `SET TRANSACTION ISOLATION LEVEL READ UNCOMMITTED;  \nset nocount on; \n`;
     this.pool = null;
   }
 
-  #reply(req: Request, res: Response, data: any = null) {
+  #reply(req: Request, res: Response, data: any) {
     res.status(200);
     if (this.responseHeaders && Array.isArray(this.responseHeaders)) {
       this.responseHeaders.forEach((h) => {
@@ -158,8 +160,8 @@ module.exports = class DB {
       return;
     }
 
-    log.warning(`****************** MSSQL ERROR start ******************`);
-    log.warning(" -------- ", `(db:${databse}):`, message, " -------- ");
+    console.log(`****************** MSSQL ERROR start ******************`);
+    console.log(" -------- ", `(db:${databse}):`, message, " -------- ");
     if (params && (params.length > 0 || Object.keys(params).length > 0)) {
       let par = params;
       if (typeof params === "string") {
@@ -170,37 +172,39 @@ module.exports = class DB {
 
       this.printParams(par);
     }
-    log.warning(qry);
-    log.warning(`****************** MSSQL ERROR end ******************`);
+    console.log(qry);
+    console.log(`****************** MSSQL ERROR end ******************`);
   }
 
   /**
    * @description Executes sql statement and send results to client
-   * @param {express request} req - express request
-   * @param {express response} res - express request response
-   * @param {string} query - sql server query ex: select * from table
-   * @param {object} params - all keys are converted to sql parameters with @_ ex: select * from tbl where key = @_key, {key: 123}
-   * @returns {array} - array of objects data in array
-   * @type {any}
+   * @param {Request} req - express request
+   * @param {Response} res - express request response
+   * @param {string} qry - sql server query ex: select * from table
+   * @param {object} params - json object whose keys are converted to sql parameters. in sql use @_ + key. example select * from table where someid = @_myid {myid: 123} 
+   * @returns {Promise<void>} - array of objects
    */
-  async send(req: Request, res: Response, qry: string, params: any) {
+  async send(req: Request, res: Response, qry: string, params: any): Promise<void> {
     const data = await this.exec(qry, params);
 
-    if (req.accepts("json")) {
-      this.toJSON(req, res, data);
-    } else if (req.accepts("text")) {
-      this.toTEXT(req, res, data);
-    } else if (req.accepts("html")) {
-      this.toTEXT(req, res, data);
-    } else if (req.accepts("xml")) {
-      throw "mssql feature of send function has not been implemented yet";
-    } else {
-      this.toJSON(req, res, data);
+    if(req instanceof Request){
+if (req.accepts("json")) {
+                return this.toJSON(req, res, data);
+              } else if (req.accepts("text")) {
+                return this.toTEXT(req, res, data);
+              } else if (req.accepts("html")) {
+                return this.toTEXT(req, res, data);
+              } else if (req.accepts("xml")) {
+                throw "mssql feature of send function has not been implemented yet";
+              }
     }
+             
+
+
+    this.toJSON(req, res, data);
+    
   }
-  async sendQry(req: Request, res: Response, qry: string, params: any) {
-    await this.send(req, res, qry, params);
-  }
+
   toTEXT(req: Request, res: Response, data: any) {
     this.#reply(req, res, data);
   }
@@ -335,7 +339,7 @@ module.exports = class DB {
   }
   test(qry: string, params: any) {
     this.printParams(params);
-    log.cyan(qry);
+    console.log(qry);
   }
   printParams(params: any) {
     let p = "declare \n";
@@ -357,7 +361,7 @@ module.exports = class DB {
       comma = ",";
     });
 
-    log.warning(p);
+    console.log(p);
   }
 
   #tsParam(name: string, type: string) {
