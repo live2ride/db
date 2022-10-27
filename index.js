@@ -1,8 +1,8 @@
 "use strict";
-import sql from "mssql";
-import forEach from "lodash/forEach";
-import isNumber from "lodash/isNumber";
-import map from "lodash/map";
+const sql = require("mssql");
+const forEach = require("lodash/forEach");
+const isNumber = require("lodash/isNumber");
+const map = require("lodash/map");
 // const log = require("@live2ride/log")
 class DBError extends Error {
     name;
@@ -152,20 +152,20 @@ module.exports = class DB {
      */
     async send(req, res, qry, params) {
         const data = await this.exec(qry, params);
-        if (req instanceof Request) {
-            if (req.accepts("json")) {
-                return this.toJSON(req, res, data);
-            }
-            else if (req.accepts("text")) {
-                return this.toTEXT(req, res, data);
-            }
-            else if (req.accepts("html")) {
-                return this.toTEXT(req, res, data);
-            }
-            else if (req.accepts("xml")) {
-                throw "mssql feature of send function has not been implemented yet";
-            }
+        // if(req instanceof Request){
+        if (req.accepts("json")) {
+            return this.toJSON(req, res, data);
         }
+        else if (req.accepts("text")) {
+            return this.toTEXT(req, res, data);
+        }
+        else if (req.accepts("html")) {
+            return this.toTEXT(req, res, data);
+        }
+        else if (req.accepts("xml")) {
+            throw "mssql feature of send function has not been implemented yet";
+        }
+        // }
         this.toJSON(req, res, data);
     }
     toTEXT(req, res, data) {

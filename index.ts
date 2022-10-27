@@ -1,9 +1,12 @@
 "use strict";
-import sql  from "mssql";
-import forEach from "lodash/forEach"
-import isNumber from "lodash/isNumber"
-import map from "lodash/map"
-import { Request, Response } from "express";
+
+
+const sql = require("mssql");
+const forEach = require("lodash/forEach")
+const isNumber = require("lodash/isNumber")
+const map = require("lodash/map")
+
+
 // const log = require("@live2ride/log")
 
 class DBError extends Error {
@@ -60,7 +63,7 @@ module.exports = class DB {
   tranHeader: string
   pool: any
 
-  config: sql.config = {
+  config: any = {
       database: process.env.DB_DATABASE,
       user: process.env.DB_USER,
       password: process.env.DB_PASSWORD,
@@ -94,7 +97,7 @@ module.exports = class DB {
     this.pool = null;
   }
 
-  #reply(req: Request, res: Response, data: any) {
+  #reply(req: any, res: any, data: any) {
     res.status(200);
     if (this.responseHeaders && Array.isArray(this.responseHeaders)) {
       this.responseHeaders.forEach((h) => {
@@ -184,10 +187,10 @@ module.exports = class DB {
    * @param {object} params - json object whose keys are converted to sql parameters. in sql use @_ + key. example select * from table where someid = @_myid {myid: 123} 
    * @returns {Promise<void>} - array of objects
    */
-  async send(req: Request, res: Response, qry: string, params: any): Promise<void> {
+  async send(req: any, res: any, qry: string, params: any): Promise<void> {
     const data = await this.exec(qry, params);
 
-    if(req instanceof Request){
+    // if(req instanceof Request){
 if (req.accepts("json")) {
                 return this.toJSON(req, res, data);
               } else if (req.accepts("text")) {
@@ -197,9 +200,8 @@ if (req.accepts("json")) {
               } else if (req.accepts("xml")) {
                 throw "mssql feature of send function has not been implemented yet";
               }
-    }
+    // }
              
-
 
     this.toJSON(req, res, data);
     
