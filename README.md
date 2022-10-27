@@ -230,29 +230,3 @@ const params = {
     , @_text NVarChar(74) = 'add '@_' for each key you want to use in your query '
     , @_obj NVarChar(max) = '{"message":"im an object"}'
 ```
-
-## helper functions
-
-write jsdocs quicker
-
-```javascript
-
-lets say you have table
-example (
-  id int,
-  start_date datetime,
-  title nvarchar(100),
-  body nvarchar(200)
-)
-
-  db.tableToJSDoc("example");
-  /**
-   * @description table XYZ
-   * @id {number} -
-   * @start_date {date} -
-   * @title {string} -
-   * @body {string} -
-   * @returns {???}
-   * /
-
-```
