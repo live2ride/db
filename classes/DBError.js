@@ -1,4 +1,6 @@
-export default class DBError extends Error {
+"use strict";
+Object.defineProperty(exports, "__esModule", { value: true });
+class DBError extends Error {
     constructor(err) {
         super("Database error"); // (1)
         this.name = "DBError";
@@ -17,3 +19,4 @@ export default class DBError extends Error {
         Error.captureStackTrace(this, this.constructor);
     }
 }
+exports.default = DBError;

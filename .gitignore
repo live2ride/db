@@ -3,7 +3,6 @@
 _gsdata_
 /_gsdata_
 
-*-lock.json
 /node_modules
 *.log*
 /.pnp
