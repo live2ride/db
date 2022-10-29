@@ -1,103 +1,71 @@
 "use strict";
 
-
-const sql = require("mssql");
-const forEach = require("lodash/forEach")
-const isNumber = require("lodash/isNumber")
-const map = require("lodash/map")
-
-
-// const log = require("@live2ride/log")
-
-class DBError extends Error {
-name:string
-status_code:number
-number:string
-state:string
-class:string
-lineNumber:string
-serverName:string
-database:string
-message:string
-msg:string
-qry:string
-
-params:string
-stack:string
-
-  constructor(err: any) {
-    super("Database error"); // (1)
-    this.name = "DBError";
-    this.status_code = 500;
-    this.number = err?.number;
-    this.state = err?.state;
-    this.class = err?.class;
-    this.lineNumber = err?.lineNumber;
-    this.serverName = err?.serverName;
-    this.database = err?.database;
-    this.message = err?.message;
-    this.msg = err?.message;
-    this.qry = err?.qry;
-
-    this.params = err?.params;
-    this.stack = err?.stack;
-
-    Error.captureStackTrace(this, this.constructor);
-  }
-}
+import sql from "mssql";
+import forEach from "lodash/forEach";
+import isNumber from "lodash/isNumber";
+import map from "lodash/map";
+import MSSQLError from "./classes/DBError";
+import { Request, Response } from "express";
 
 function isNumeric(value: string | number) {
   return /^-?\d+$/.test(String(value));
 }
 
-function isFloat(n) {
+function isFloat(n: any) {
   return !isNaN(n) && n.toString().indexOf(".") != -1;
 }
+interface IConfig {
+  config: {
+    database: string;
+    user: string;
+    password: string;
+    server: string;
+  };
+}
 
-module.exports = class DB {
+interface IDB {
+  esponseHeaders: string;
+  tranHeader: string;
+  pool: any;
+  config: IConfig;
   errors: {
-    print: boolean
-  }
+    print: boolean;
+  };
+}
+type PlainObject = { [k: string]: any };
 
-  responseHeaders: string
-  tranHeader: string
-  pool: any
+export default class DB {
+  errors: {
+    print: false;
+  };
+
+  responseHeaders: string;
+  tranHeader: string;
+  pool: any;
 
   config: any = {
-      database: process.env.DB_DATABASE,
-      user: process.env.DB_USER,
-      password: process.env.DB_PASSWORD,
-      server: process.env.DB_SERVER || "",
-      options: {
-        encrypt: false, // for azure
-        trustServerCertificate: false, // change to true for local dev / self-signed certs
-      },
-      pool: {
-        max: 100,
-        min: 0,
-        idleTimeoutMillis: 30000,
-      },
-    };
+    database: process.env.DB_DATABASE,
+    user: process.env.DB_USER,
+    password: process.env.DB_PASSWORD,
+    server: process.env.DB_SERVER || "",
+  };
 
-  constructor(_config: any) {
-    
+  constructor(_config: PlainObject) {
     const { responseHeaders, errors, ...rest } = _config || {};
 
-    this.config = {...this.config, ...rest}
+    this.config = { ...this.config, ...rest };
     const isDev = ["development", "dev"].includes(String(process.env.NODE_ENV));
     this.errors = {
       print: isDev ? true : false,
       ...(errors || {}),
     };
 
-    
-
     this.responseHeaders = responseHeaders;
     this.tranHeader = _config?.tranHeader || ""; // `SET TRANSACTION ISOLATION LEVEL READ UNCOMMITTED;  \nset nocount on; \n`;
     this.pool = null;
   }
 
-  #reply(req: any, res: any, data: any) {
+  #reply(req: Request, res: Response, data: any) {
     res.status(200);
     if (this.responseHeaders && Array.isArray(this.responseHeaders)) {
       this.responseHeaders.forEach((h) => {
@@ -109,20 +77,33 @@ module.exports = class DB {
 
     res.send(data);
   }
-
-  async exec(qry: string, params: any, first_row = false):  Promise<any> {
+  /**
+   * @description Simple function which adds params (json object) as parameters to sql then executes sql query and returns results
+   * @param {string} query - Sql query
+   * @param {Object} params - json object with values whose keys are converted into (@_ + key)  ex: {id: 123} id = @_id
+   * @param {boolean} first_row - return only first row as object
+   * @returns {Promise<void>} - array of objects
+   * @example 
+   let qry = `select * from dbo.myTable where id = @_id and type = @_type
+   let data = await db.exec(qry, {id: 123, type: "some type"})
+   console.log(data);
+   */
+  async exec(
+    query: string,
+    params: PlainObject,
+    first_row = false
+  ): Promise<any> {
     if (!this.pool) {
       const conPool = await new sql.ConnectionPool(this.config);
       this.pool = await conPool.connect();
     }
 
     let req: any = this.pool.request();
-    
+
     req = this.#getDBParams(req, params);
-    
 
     try {
-      const result = await req.query(this.tranHeader + " " + qry);
+      const result = await req.query(this.tranHeader + " " + query);
 
       return this.#jsonParseData(result.recordset, first_row);
     } catch (err: any) {
@@ -131,7 +112,7 @@ module.exports = class DB {
         err.message.includes("unknown reason")
       ) {
         // retry
-        return this.exec(qry, params);
+        return this.exec(query, params);
       }
       let info = {
         // code: err.number === 2627 ? "primary-key-violation" : "unknown",
@@ -142,7 +123,7 @@ module.exports = class DB {
         serverName: err?.serverName,
         database: this.config.database,
         message: err.message || "invalid err.message execute",
-        qry: qry,
+        qry: query,
         params: params,
         // stack: Error().stack.split("\n"),
       };
@@ -151,10 +132,10 @@ module.exports = class DB {
         this.#consoleLogError(info);
       }
 
-      throw new DBError(info);
+      throw new MSSQLError(info);
     }
   }
-  #consoleLogError(props: any) {
+  #consoleLogError(props: PlainObject) {
     const { databse, qry, message, params, code, database } = props;
     let par = "";
 
@@ -184,39 +165,42 @@ module.exports = class DB {
    * @param {Request} req - express request
    * @param {Response} res - express request response
    * @param {string} qry - sql server query ex: select * from table
-   * @param {object} params - json object whose keys are converted to sql parameters. in sql use @_ + key. example select * from table where someid = @_myid {myid: 123} 
+   * @param {object} params - json object whose keys are converted to sql parameters. in sql use @_ + key. example select * from table where someid = @_myid {myid: 123}
    * @returns {Promise<void>} - array of objects
    */
-  async send(req: any, res: any, qry: string, params: any): Promise<void> {
+  async send(
+    req: Request,
+    res: Response,
+    qry: string,
+    params: PlainObject
+  ): Promise<void> {
     const data = await this.exec(qry, params);
 
     // if(req instanceof Request){
-if (req.accepts("json")) {
-                return this.toJSON(req, res, data);
-              } else if (req.accepts("text")) {
-                return this.toTEXT(req, res, data);
-              } else if (req.accepts("html")) {
-                return this.toTEXT(req, res, data);
-              } else if (req.accepts("xml")) {
-                throw "mssql feature of send function has not been implemented yet";
-              }
+    if (req.accepts("json")) {
+      return this.toJSON(req, res, data);
+    } else if (req.accepts("text")) {
+      return this.toTEXT(req, res, data);
+    } else if (req.accepts("html")) {
+      return this.toTEXT(req, res, data);
+    } else if (req.accepts("xml")) {
+      throw "mssql feature of send function has not been implemented yet";
+    }
     // }
-             
 
     this.toJSON(req, res, data);
-    
   }
 
-  toTEXT(req: Request, res: Response, data: any) {
+  toTEXT(req: Request, res: Response, data: PlainObject) {
     this.#reply(req, res, data);
   }
 
-  toJSON(req: Request, res: Response, data: any) {
+  toJSON(req: Request, res: Response, data: PlainObject) {
     let jsonData = JSON.stringify(data);
     this.#reply(req, res, jsonData);
   }
 
-  #jsonParseData(data: any, first_row: boolean) {
+  #jsonParseData(data: PlainObject, first_row: boolean) {
     if (data && data[0]) {
       forEach(data, (o: any) => {
         //parse all the objects
@@ -252,7 +236,7 @@ if (req.accepts("json")) {
     }
   }
 
-  #getDBParams(req: any, params: any) {
+  #getDBParams(req: Request, params: PlainObject) {
     let pars = this.#getParamsKeys(params);
 
     forEach(pars, (o: any) => {
@@ -263,7 +247,7 @@ if (req.accepts("json")) {
 
     return req;
   }
-  #getParamsKeys(params: any) {
+  #getParamsKeys(params: PlainObject) {
     return map(params, (value: string, key: string) => {
       let _key = `_${key}`;
 
@@ -339,11 +323,18 @@ if (req.accepts("json")) {
     }
     return { type: type, value: _value };
   }
-  test(qry: string, params: any) {
+  test(qry: string, params: PlainObject) {
     this.printParams(params);
     console.log(qry);
   }
-  printParams(params: any) {
+
+  /**
+   * prints your object as sql parameters.
+   * useful if you need to test your query in sql management studio
+   *
+   * @param {Object} params
+   */
+  printParams(params: PlainObject) {
     let p = "declare \n";
 
     let comma = "";
@@ -365,23 +356,4 @@ if (req.accepts("json")) {
 
     console.log(p);
   }
-
-  #tsParam(name: string, type: string) {
-    const sqlToTsTypes = {
-      number: ["bigint", "int", "decimal", "money", "float"],
-      // date: ["date", "datetime", "datetime2"],
-      // string: ["char", "text", "nchar", "ntext", "varchar", "nvarchar"],
-      string: ["char", "text", "nchar", "ntext", "varchar", "nvarchar","date", "datetime", "datetime2"],
-      
-      other: ["binary", "image"],
-    };
-    for (const [key, val] of Object.entries(sqlToTsTypes)) {
-      if (val.includes(type)) {
-        return key;
-      }
-    }
-  }
-
-
-  
-};
+}
