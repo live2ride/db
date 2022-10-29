@@ -1,6 +1,6 @@
 "use strict";
 
-import sql from "mssql";
+import sql, { Request as MSSQLRequest } from "mssql";
 import forEach from "lodash/forEach";
 import isNumber from "lodash/isNumber";
 import map from "lodash/map";
@@ -43,17 +43,29 @@ export default class DB {
   tranHeader: string;
   pool: any;
 
-  config: any = {
-    database: process.env.DB_DATABASE,
-    user: process.env.DB_USER,
-    password: process.env.DB_PASSWORD,
-    server: process.env.DB_SERVER || "",
-  };
+  config: any;
 
-  constructor(_config: PlainObject) {
+  constructor(_config?: PlainObject) {
     const { responseHeaders, errors, ...rest } = _config || {};
 
-    this.config = { ...this.config, ...rest };
+    this.config = {
+      database: process.env.DB_DATABASE,
+      user: process.env.DB_USER,
+      password: process.env.DB_PASSWORD,
+      server: process.env.DB_SERVER || "",
+      options: {
+        parseJSON: true,
+        encrypt: false, // for azure
+        trustServerCertificate: false, // change to true for local dev / self-signed certs
+      },
+      pool: {
+        max: 100,
+        min: 0,
+        idleTimeoutMillis: 30000,
+      },
+      ...rest,
+    };
+
     const isDev = ["development", "dev"].includes(String(process.env.NODE_ENV));
     this.errors = {
       print: isDev ? true : false,
@@ -90,7 +102,7 @@ export default class DB {
    */
   async exec(
     query: string,
-    params: PlainObject,
+    params?: PlainObject,
     first_row = false
   ): Promise<any> {
     if (!this.pool) {
@@ -98,7 +110,7 @@ export default class DB {
       this.pool = await conPool.connect();
     }
 
-    let req: any = this.pool.request();
+    let req: MSSQLRequest = this.pool.request();
 
     req = this.#getDBParams(req, params);
 
@@ -236,15 +248,16 @@ export default class DB {
     }
   }
 
-  #getDBParams(req: Request, params: PlainObject) {
-    let pars = this.#getParamsKeys(params);
+  #getDBParams(req: MSSQLRequest, params?: PlainObject): MSSQLRequest {
+    if (params) {
+      let pars = this.#getParamsKeys(params);
 
-    forEach(pars, (o: any) => {
-      const { key, value } = o;
-      let _key = key;
-      this.#reqInput(req, _key, value);
-    });
-
+      forEach(pars, (o: any) => {
+        const { key, value } = o;
+        let _key = key;
+        this.#reqInput(req, _key, value);
+      });
+    }
     return req;
   }
   #getParamsKeys(params: PlainObject) {
@@ -254,7 +267,7 @@ export default class DB {
       return { key: _key, value: value };
     });
   }
-  #reqInput(req: any, _key: string, value: any) {
+  #reqInput(req?: MSSQLRequest, _key?: string, value?: any) {
     let _value = value;
     let sqlType, type;
     if (_key === "_page" && !_value) {
@@ -314,12 +327,14 @@ export default class DB {
         type = `NVarChar(${JSON.stringify(_value).length + 10})`;
       }
 
-      if (req) req.input(_key, sqlType, _value);
+      if (req && _key) req.input(_key, sqlType, _value);
 
       // console.log("param is sqlType:::::::::::::", _key, `(${type}) = `, _value);
     } catch (e) {
       // console.log("param catch", _value, e);
-      req.input(_key, sql.NVarChar(100), _value);
+      if (req && _key) {
+        req.input(_key, sql.NVarChar(100), _value);
+      }
     }
     return { type: type, value: _value };
   }

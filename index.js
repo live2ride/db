@@ -43,14 +43,16 @@ function isFloat(n) {
 class DB {
     constructor(_config) {
         _DB_instances.add(this);
-        this.config = {
-            database: process.env.DB_DATABASE,
-            user: process.env.DB_USER,
-            password: process.env.DB_PASSWORD,
-            server: process.env.DB_SERVER || "",
-        };
         const _a = _config || {}, { responseHeaders, errors } = _a, rest = __rest(_a, ["responseHeaders", "errors"]);
-        this.config = Object.assign(Object.assign({}, this.config), rest);
+        this.config = Object.assign({ database: process.env.DB_DATABASE, user: process.env.DB_USER, password: process.env.DB_PASSWORD, server: process.env.DB_SERVER || "", options: {
+                parseJSON: true,
+                encrypt: false,
+                trustServerCertificate: false, // change to true for local dev / self-signed certs
+            }, pool: {
+                max: 100,
+                min: 0,
+                idleTimeoutMillis: 30000,
+            } }, rest);
         const isDev = ["development", "dev"].includes(String(process.env.NODE_ENV));
         this.errors = Object.assign({ print: isDev ? true : false }, (errors || {}));
         this.responseHeaders = responseHeaders;
@@ -242,12 +244,14 @@ _DB_instances = new WeakSet(), _DB_reply = function _DB_reply(req, res, data) {
         }
     }
 }, _DB_getDBParams = function _DB_getDBParams(req, params) {
-    let pars = __classPrivateFieldGet(this, _DB_instances, "m", _DB_getParamsKeys).call(this, params);
-    (0, forEach_1.default)(pars, (o) => {
-        const { key, value } = o;
-        let _key = key;
-        __classPrivateFieldGet(this, _DB_instances, "m", _DB_reqInput).call(this, req, _key, value);
-    });
+    if (params) {
+        let pars = __classPrivateFieldGet(this, _DB_instances, "m", _DB_getParamsKeys).call(this, params);
+        (0, forEach_1.default)(pars, (o) => {
+            const { key, value } = o;
+            let _key = key;
+            __classPrivateFieldGet(this, _DB_instances, "m", _DB_reqInput).call(this, req, _key, value);
+        });
+    }
     return req;
 }, _DB_getParamsKeys = function _DB_getParamsKeys(params) {
     return (0, map_1.default)(params, (value, key) => {
@@ -318,13 +322,15 @@ _DB_instances = new WeakSet(), _DB_reply = function _DB_reply(req, res, data) {
             sqlType = mssql_1.default.NVarChar(JSON.stringify(_value).length + 10);
             type = `NVarChar(${JSON.stringify(_value).length + 10})`;
         }
-        if (req)
+        if (req && _key)
             req.input(_key, sqlType, _value);
         // console.log("param is sqlType:::::::::::::", _key, `(${type}) = `, _value);
     }
     catch (e) {
         // console.log("param catch", _value, e);
-        req.input(_key, mssql_1.default.NVarChar(100), _value);
+        if (req && _key) {
+            req.input(_key, mssql_1.default.NVarChar(100), _value);
+        }
     }
     return { type: type, value: _value };
 };

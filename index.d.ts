@@ -11,7 +11,7 @@ export default class DB {
     tranHeader: string;
     pool: any;
     config: any;
-    constructor(_config: PlainObject);
+    constructor(_config?: PlainObject);
     /**
      * @description Simple function which adds params (json object) as parameters to sql then executes sql query and returns results
      * @param {string} query - Sql query
@@ -23,7 +23,7 @@ export default class DB {
      let data = await db.exec(qry, {id: 123, type: "some type"})
      console.log(data);
      */
-    exec(query: string, params: PlainObject, first_row?: boolean): Promise<any>;
+    exec(query: string, params?: PlainObject, first_row?: boolean): Promise<any>;
     /**
      * @description Executes sql statement and send results to client
      * @param {Request} req - express request
