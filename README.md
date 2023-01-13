@@ -167,7 +167,7 @@ const router = express.Router();
 
 
     router.get("/pow",
-      asyncHandler(async (req, res) => {
+      asyncHandler(async (req: Request, res: Response) => {
           let qry = `select name from dbo.table where id = @_id`
           let params = { id = 100 }
 

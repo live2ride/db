@@ -4,8 +4,9 @@ import sql, { Request as MSSQLRequest } from "mssql";
 import forEach from "lodash/forEach";
 import isNumber from "lodash/isNumber";
 import map from "lodash/map";
-import MSSQLError from "./classes/DBError";
+import MSSQLError, { DBErrorProps } from "./classes/DBError";
 import { Request, Response } from "express";
+import { ConfigProps, DbProps } from "./types";
 
 function isNumeric(value: string | number) {
   return /^-?\d+$/.test(String(value));
@@ -14,44 +15,41 @@ function isNumeric(value: string | number) {
 function isFloat(n: any) {
   return !isNaN(n) && n.toString().indexOf(".") != -1;
 }
-interface IConfig {
-  config: {
-    database: string;
-    user: string;
-    password: string;
-    server: string;
-  };
-}
 
-interface IDB {
-  esponseHeaders: string;
-  tranHeader: string;
-  pool: any;
-  config: IConfig;
-  errors: {
+type PlainObject = { [k: string]: any } | null | undefined;
+type QueryParameters = { [k: string]: any } | null | undefined;
+
+export default class DB implements DbProps {
+  private errors: {
     print: boolean;
   };
-}
-type PlainObject = { [k: string]: any };
 
-export default class DB {
-  errors: {
-    print: false;
-  };
+  private responseHeaders: string[];
+  private tranHeader: string;
+  private pool: any;
 
-  responseHeaders: string;
-  tranHeader: string;
-  pool: any;
+  private config: ConfigProps;
 
-  config: any;
+  log: Function = console.log;
 
-  constructor(_config?: PlainObject) {
-    const { responseHeaders, errors, ...rest } = _config || {};
+  /**
+   * Creates an instance of DB.
+   * @typedef IConfig
+   *
+   * @param {string[]} [responseHeaders] - headers to be injected in express response
+   * @param {string} [tranHeader] - additional transaction header which at the begining of each query. ex: "set nocount on "
+   * @param {boolean} [errors.print] - console log error query with parameters for easy troubleshooting. ( uses log function )
+   * @param {Function} [log] - your function to log to console: default condole.log but you can use colors etc...
+   * @memberof DB
+   */
+  constructor(_config?: ConfigProps) {
+    const { responseHeaders, tranHeader, log, errors, ...rest } = _config || {};
 
+    if (log) this.log = log;
     this.config = {
-      database: process.env.DB_DATABASE,
-      user: process.env.DB_USER,
-      password: process.env.DB_PASSWORD,
+      database: process.env.DB_DATABASE || "",
+      user: process.env.DB_USER || "",
+      password: process.env.DB_PASSWORD || "",
       server: process.env.DB_SERVER || "",
       options: {
         parseJSON: true,
@@ -72,8 +70,8 @@ export default class DB {
       ...(errors || {}),
     };
 
-    this.responseHeaders = responseHeaders;
-    this.tranHeader = _config?.tranHeader || ""; // `SET TRANSACTION ISOLATION LEVEL READ UNCOMMITTED;  \nset nocount on; \n`;
+    this.responseHeaders = responseHeaders || [];
+    this.tranHeader = tranHeader || ""; // `SET TRANSACTION ISOLATION LEVEL READ UNCOMMITTED;  \nset nocount on; \n`;
     this.pool = null;
   }
 
@@ -83,12 +81,12 @@ export default class DB {
       this.responseHeaders.forEach((h) => {
         res.setHeader(h[0], h[1]);
       });
+    } else {
     }
-
-    res.setHeader("Content-Type", "text/json");
 
     res.send(data);
   }
+
   /**
    * @description Simple function which adds params (json object) as parameters to sql then executes sql query and returns results
    * @param {string} query - Sql query
@@ -98,13 +96,17 @@ export default class DB {
    * @example 
    let qry = `select * from dbo.myTable where id = @_id and type = @_type
    let data = await db.exec(qry, {id: 123, type: "some type"})
-   console.log(data);
+   this.#consoleLog(data);
+  /**
+   *
+   *
+   * @param {string} query
+   * @param {QueryParameters} [params]
+   * @param {boolean} [first_row=false]
+   * @return {*}  {Promise<any>}
+   * @memberof DB
    */
-  async exec(
-    query: string,
-    params?: PlainObject,
-    first_row = false
-  ): Promise<any> {
+  async exec(query: string, params?: QueryParameters, first_row = false): Promise<any> {
     if (!this.pool) {
       const conPool = await new sql.ConnectionPool(this.config);
       this.pool = await conPool.connect();
@@ -114,19 +116,26 @@ export default class DB {
 
     req = this.#getDBParams(req, params);
 
+    /**
+     * we are creating stack trace here so we can see where the query originated from
+     * if we use the actual error in catch block, it creates stack trace to MSSQL
+     * and most likely error is in the query
+     */
+    const execError = new Error();
     try {
       const result = await req.query(this.tranHeader + " " + query);
 
       return this.#jsonParseData(result.recordset, first_row);
     } catch (err: any) {
-      if (
-        err.message.includes("deadlock") ||
-        err.message.includes("unknown reason")
-      ) {
+      if (err.message.includes("deadlock") || err.message.includes("unknown reason")) {
         // retry
         return this.exec(query, params);
       }
-      let info = {
+
+      /** setting query error message */
+      execError.message = err.message;
+
+      let info: DBErrorProps = {
         // code: err.number === 2627 ? "primary-key-violation" : "unknown",
         number: err.number,
         state: err.state,
@@ -137,27 +146,31 @@ export default class DB {
         message: err.message || "invalid err.message execute",
         qry: query,
         params: params,
-        // stack: Error().stack.split("\n"),
+
+        stack: execError.stack, //+ "\n" + err.stack.split("\n").slice(0, 2).join("\n"),
+        // err.stack.split("\n").slice(0, 2).join("\n") + "\n" + execError.stack,
       };
 
       if (this.errors?.print) {
         this.#consoleLogError(info);
       }
-
       throw new MSSQLError(info);
+      // error.stack = execError.stack;
+      // throw err;
     }
   }
-  #consoleLogError(props: PlainObject) {
-    const { databse, qry, message, params, code, database } = props;
+  #consoleLogError(props: DBErrorProps) {
+    const { number, database, qry, message, params, status_code } = props;
     let par = "";
 
-    if (props.number === 2627) {
+    if (number === 2627) {
       //"primary-key-violation"
       return;
     }
 
-    console.log(`****************** MSSQL ERROR start ******************`);
-    console.log(" -------- ", `(db:${databse}):`, message, " -------- ");
+    this.#consoleLog(`****************** MSSQL ERROR start ******************`);
+
+    this.#consoleLog(" -------- ", `(db:${database}):`, message, " -------- ");
     if (params && (params.length > 0 || Object.keys(params).length > 0)) {
       let par = params;
       if (typeof params === "string") {
@@ -168,8 +181,8 @@ export default class DB {
 
       this.printParams(par);
     }
-    console.log(qry);
-    console.log(`****************** MSSQL ERROR end ******************`);
+    this.#consoleLog(qry);
+    this.#consoleLog(`****************** MSSQL ERROR end ******************`);
   }
 
   /**
@@ -180,22 +193,22 @@ export default class DB {
    * @param {object} params - json object whose keys are converted to sql parameters. in sql use @_ + key. example select * from table where someid = @_myid {myid: 123}
    * @returns {Promise<void>} - array of objects
    */
-  async send(
-    req: Request,
-    res: Response,
-    qry: string,
-    params: PlainObject
-  ): Promise<void> {
+  async send(req: Request, res: Response, qry: string, params?: PlainObject): Promise<void> {
     const data = await this.exec(qry, params);
 
     // if(req instanceof Request){
     if (req.accepts("json")) {
+      // res.setHeader("Content-Type", "application/json");
       return this.toJSON(req, res, data);
     } else if (req.accepts("text")) {
+      // res.setHeader("Content-Type", "text/plain");
       return this.toTEXT(req, res, data);
     } else if (req.accepts("html")) {
+      // res.setHeader("Content-Type", "text/html");
       return this.toTEXT(req, res, data);
     } else if (req.accepts("xml")) {
+      // res.setHeader("Content-Type", "application/zip");
+
       throw "mssql feature of send function has not been implemented yet";
     }
     // }
@@ -267,6 +280,19 @@ export default class DB {
       return { key: _key, value: value };
     });
   }
+  #sqlVarcharLen(val: any){
+    try{
+      const len = JSON.stringify(val)?.length;
+      if(len > 1000){
+        return sql.MAX;
+      }
+      return len + 50;
+    }catch{
+      return 10;
+    }
+    
+
+  }
   #reqInput(req?: MSSQLRequest, _key?: string, value?: any) {
     let _value = value;
     let sqlType, type;
@@ -276,8 +302,8 @@ export default class DB {
     try {
       if (value === null || value === undefined) {
         _value = null;
-        sqlType = sql.NVarChar(11);
-        type = "NVarChar(11)";
+        sqlType = sql.NVarChar(40); /** keep minimum length to 40 because isnull(@_date, sysdatetime()) truncates dates to this length */
+        type = "NVarChar(40)";
       } else if (_value.toString() === "0") {
         sqlType = sql.Int;
         type = "int";
@@ -285,20 +311,24 @@ export default class DB {
         _value = Number(_value);
 
         if (isFloat(_value)) {
-          // console.log("param is float:::::::::::::", _key, _value)
+          // this.#consoleLog("param is float:::::::::::::", _key, _value)
           sqlType = sql.Float;
           type = "float";
         } else {
           if (_value > 2047483647) {
-            // console.log("param is BigInt:::::::::::::", _key, _value);
+            // this.#consoleLog("param is BigInt:::::::::::::", _key, _value);
             sqlType = sql.BigInt;
             type = "BigInt";
           } else {
-            // console.log("param is Int:::::::::::::", _key, _value);
+            // this.#consoleLog("param is Int:::::::::::::", _key, _value);
             sqlType = sql.Int;
             type = "int";
           }
         }
+      }else if (_value instanceof Date){//must come before object since date is type of object
+        _value = value.toISOString().replace("T", " ");
+        sqlType = sql.DateTime;
+        type = "DateTime";
       } else if (typeof _value === "object" || _value instanceof Set) {
         if (_value instanceof Set) {
           _value = [...value];
@@ -308,30 +338,28 @@ export default class DB {
         sqlType = sql.NVarChar(sql.MAX);
         type = "NVarChar(max)";
       } else if (typeof _value === "string") {
-        sqlType = sql.NVarChar(JSON.stringify(_value).length + 20);
-        type = `NVarChar(${JSON.stringify(_value).length + 20})`;
+        const len = this.#sqlVarcharLen(_value);
+        sqlType = sql.NVarChar(len);
+        type = `NVarChar(${len})`;
       } else if (typeof _value == "boolean") {
-        /* dont use bit, use varchar instead  */
-
+        /* dont use bit, use varchar instead because values true and false work with varchar  */
         // sqlType = sql.Bit;
         // type = "bit";
 
         _value = JSON.stringify(_value);
         sqlType = sql.NVarChar(10);
         type = "NVarChar(10)";
-      } else if (_value instanceof Date) {
-        sqlType = sql.DateTime;
-        type = "DateTime";
       } else {
-        sqlType = sql.NVarChar(JSON.stringify(_value).length + 10);
-        type = `NVarChar(${JSON.stringify(_value).length + 10})`;
+        const len = this.#sqlVarcharLen(_value);
+        sqlType = sql.NVarChar(len);
+        type = `NVarChar(${len})`;
       }
 
       if (req && _key) req.input(_key, sqlType, _value);
 
-      // console.log("param is sqlType:::::::::::::", _key, `(${type}) = `, _value);
+      // this.#consoleLog("param is sqlType:::::::::::::", _key, `(${type}) = `, _value);
     } catch (e) {
-      // console.log("param catch", _value, e);
+      // this.#consoleLog("param catch", _value, e);
       if (req && _key) {
         req.input(_key, sql.NVarChar(100), _value);
       }
@@ -340,7 +368,7 @@ export default class DB {
   }
   test(qry: string, params: PlainObject) {
     this.printParams(params);
-    console.log(qry);
+    this.#consoleLog(qry);
   }
 
   /**
@@ -363,12 +391,21 @@ export default class DB {
       const strValue = ["int", "BigInt", "float"].includes(String(type))
         ? value
         : value === null
-        ? value
-        : `'${value}'`;
+          ? value
+          : `'${value}'`;
       p += `${comma} @${par.key} ${type} = ${strValue} \n`;
       comma = ",";
     });
 
-    console.log(p);
+    this.#consoleLog(p);
+  }
+
+  #consoleLog(...props: any) {
+    try {
+      this.log(...props);
+    } catch {
+      this.log = console.log;
+      this.log(...props);
+    }
   }
 }
