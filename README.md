@@ -1,12 +1,36 @@
-Give me the cleaned-up version of the README in Markdown, without explanations or additional comments. Format your response in Markdown syntax so I can paste it into a .md file without modification.
-README:
+# MS SQL Server Interaction Library
 
+A simple way to interact with MS SQL Server (MSSQL) using JavaScript.
 
-# Description
+## Table of Contents
 
-Simple way to interact with MS SQL Server (MSSQL).
+- [Installation](#installation)
+- [Configuration](#configuration)
+  - [Direct Configuration](#direct-configuration)
+  - [Environment Variables](#environment-variables)
+  - [Additional Config Options](#additional-config-options)
+- [Usage](#usage)
+  - [Executing Queries](#executing-queries)
+- [Examples](#examples)
+  - [Create Table](#create-table)
+  - [Select from Table](#select-from-table)
+  - [Select First Row](#select-first-row)
+- [Using with Express](#using-with-express)
+- [Troubleshooting](#troubleshooting)
+  - [Print Errors](#print-errors)
+  - [Print Parameters](#print-parameters)
+  - [Generate Insert Statement](#generate-insert-statement)
+  - [Generate Update Statement](#generate-update-statement)
 
-### Config
+## Installation
+
+```bash
+npm install live2ride/db
+```
+
+## Configuration
+
+### Direct Configuration
 
 ```javascript
 const dbConfig = {
@@ -18,7 +42,9 @@ const dbConfig = {
 const db = new DB(dbConfig);
 ```
 
-##### Alternatively, you can set variables in your `.env` file
+### Environment Variables
+
+Alternatively, set variables in your `.env` file:
 
 ```env
 DB_DATABASE=my-database-name
@@ -27,16 +53,19 @@ DB_PASSWORD=demo-password
 DB_SERVER=server-name
 ```
 
+Then initialize without parameters:
+
 ```javascript
 const db = new DB();
 ```
 
-#### Other Config Options
+### Additional Config Options
 
 - **tranHeader**: Transaction header. String added before each query.
 - **responseHeaders**: Array of headers added to response when using `db.send`.
 - **errors**:
   - **print**: Prints errors in console with statement prepared for testing. `true` in development.
+  - **includeInResponse**: Includes errors in the response.
 
 ```javascript
 const dbConfig = {
@@ -52,21 +81,24 @@ const dbConfig = {
 };
 ```
 
-### Usage
+## Usage
+
+### Executing Queries
 
 **exec**: Executes a query with parameters and returns results.
 
 ```javascript
 await db.exec(
   query, // string (any SQL statement)
-  parameters, // Javascript object or array
+  parameters, // JavaScript object or array
   first_row_only // boolean (default false)
 );
 ```
 
 ## Examples
 
-#### Following params will be used in examples below
+### Parameters Used in Examples
+
 ```javascript
 let params = {
   num: 123,
@@ -78,6 +110,7 @@ let params = {
 ```
 
 ### Create Table
+
 ```javascript
 let qry = `
   CREATE TABLE dbo.test (
@@ -90,7 +123,6 @@ let qry = `
 await db.exec(qry);
 ```
 
-
 ### Select from Table
 
 Results are always an array of records in JSON format.
@@ -100,8 +132,9 @@ let qry = "SELECT * FROM dbo.test WHERE id = @_id";
 let params = { id: 1 };
 
 let res = await db.exec(qry, params);
- 
-output:
+
+console.log(res);
+/*
 [
   {
     id: 1,
@@ -115,10 +148,11 @@ output:
     text: "add '@_' for each key you want to use in your query",
     obj: { message: "I'm an object" },
   },
-];
+]
+*/
 ```
 
-OR
+Or using `for`:
 
 ```javascript
 await db.for(qry, {}, async (row) => {
@@ -131,19 +165,21 @@ let qry = "SELECT * FROM dbo.test WHERE id IN (@_ids)";
 let params = { ids: [1, 2, 3] };
 ```
 
-#### Select First Row
+### Select First Row
 
 ```javascript
 const first_row_only = true;
 let res = await db.exec("SELECT * FROM dbo.test", null, first_row_only);
 
-output:
+console.log(res);
+/*
 {
   id: 1,
   num: undefined,
   text: "add '@_' for each key you want to use in your query",
   obj: undefined,
-},
+}
+*/
 ```
 
 ## Using with Express
@@ -176,11 +212,11 @@ const config = {
 };
 const db = new DB(config);
 
-
 let qry = `SELECT TOP 2 hello, world FROM dbo.testTable`;
 db.exec(qry, params);
 
-output:
+/*
+Output:
 ****************** MSSQL ERROR start ******************
  --------  (db:XYZ): Invalid object name 'dbo.textTable'.  -------- 
 declare
@@ -190,39 +226,48 @@ declare
 
 select * from dbo.textTable
 ****************** MSSQL ERROR end ******************
+*/
 ```
-  
 
-### Print parameters
+### Print Parameters
+
 ```javascript
 db.print.params(params);
  
+/*
 Prints to console:
 DECLARE
   @_num INT = 123,
   @_text NVARCHAR(74) = 'add '@_' for each key you want to use in your query',
   @_obj NVARCHAR(MAX) = '{"message":"I'm an object"}'
+*/
 ```
- 
-### Generate insert statement
-matches all params keys with columns in table and generates insert statement
+
+### Generate Insert Statement
+
+Matches all params keys with columns in table and generates insert statement.
 
 ```javascript
-await db.print.insert("test", params)
+await db.print.insert("test", params);
 
-output:
-insert into test (num,text,obj)
-select @_num,@_text,@_obj
+/*
+Output:
+insert into test (num, text, obj)
+select @_num, @_text, @_obj
+*/
 ```
-### Generate update statement
-```javascript
-await db.print.update("test", params)
 
-output: 
+### Generate Update Statement
+
+```javascript
+await db.print.update("test", params);
+
+/*
+Output:
 update test set 
     num = @_num,
     text = @_text,
     obj = @_obj
 where SOME_VALUE
-
+*/
 ```
