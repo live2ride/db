@@ -1,5 +1,5 @@
 export type DBErrorProps = {
-  status_code?: number;
+  code?: number;
   state: string;
   class: string;
   number: number;
@@ -12,27 +12,38 @@ export type DBErrorProps = {
   params: { [key: string]: any } | null | undefined;
   // stack: any;
   stack: any;
-}
+};
 export default class DBError extends Error implements DBErrorProps {
   name: string;
-  status_code: number;
+
+  code: number;
+
   number: number;
+
   state: string;
+
   class: string;
+
   lineNumber: string;
+
   serverName: string;
+
   database: string;
 
   message: string;
+
   msg: string;
+
   qry: string;
+
   params: { [key: string]: any } | null | undefined;
+
   stack: any;
 
   constructor(err: any) {
     super(err?.message || "Database error"); // (1)
     this.name = "DBError";
-    this.status_code = 500;
+    this.code = 500;
     this.number = err?.number;
     this.state = err?.state;
     this.class = err?.class;

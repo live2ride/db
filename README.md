@@ -1,232 +1,228 @@
+Give me the cleaned-up version of the README in Markdown, without explanations or additional comments. Format your response in Markdown syntax so I can paste it into a .md file without modification.
+README:
+
+
 # Description
 
-Simple way to interact with MS SQL Server(MSSQL)
+Simple way to interact with MS SQL Server (MSSQL).
 
 ### Config
 
 ```javascript
 const dbConfig = {
-  database: "master",
-  user: "demo user",
-  password: "demo password",
-  server: 192.168.0.1,
+  database: "database",
+  user: "user",
+  password: "password",
+  server: "192.168.0.1",
 };
 const db = new DB(dbConfig);
-
 ```
 
-##### Alternatively you can set variables in your env file
+##### Alternatively, you can set variables in your `.env` file
+
+```env
+DB_DATABASE=my-database-name
+DB_USER=demo-user
+DB_PASSWORD=demo-password
+DB_SERVER=server-name
+```
 
 ```javascript
-.env {
-  DB_DATABASE=my-database-name
-  DB_USER=demo-user
-  DB_PASSWORD=demo-password
-  DB_SERVER=server-name
-}
 const db = new DB();
 ```
 
-#### Other config options
+#### Other Config Options
 
-**tranHeader**: transaction header. string added before each query.
-**responseHeaders**: array of headers added to response when using db.send
-**errors**:
-
-- **print**: prints errors in console with statement prepared for testing. true in development
+- **tranHeader**: Transaction header. String added before each query.
+- **responseHeaders**: Array of headers added to response when using `db.send`.
+- **errors**:
+  - **print**: Prints errors in console with statement prepared for testing. `true` in development.
 
 ```javascript
-example:
 const dbConfig = {
   tranHeader: "set nocount on;",
-  errors:{
+  errors: {
     print: true,
     includeInResponse: true,
   },
   responseHeaders: [
-      ["Access-Control-Allow-Origin", "*"],
-      ["Access-Control-Allow-Methods", "GET, POST, OPTIONS, PUT, PATCH, DELETE"],
-  ];
+    ["Access-Control-Allow-Origin", "*"],
+    ["Access-Control-Allow-Methods", "GET, POST, OPTIONS, PUT, PATCH, DELETE"],
+  ],
 };
 ```
 
 ### Usage
 
-exec: executes query with parameters and returns results;
+**exec**: Executes a query with parameters and returns results.
 
 ```javascript
 await db.exec(
-  query: any sql statement
-  parameters: (json object) ,
-  first_row_only: default false
-    * true returns json object
-    * false returns array of objects
-)
+  query, // string (any SQL statement)
+  parameters, // Javascript object or array
+  first_row_only // boolean (default false)
+);
 ```
 
 ## Examples
 
-### Create table
+#### Following params will be used in examples below
+```javascript
+let params = {
+  num: 123,
+  text: "add '@_' for each key you want to use in your query",
+  obj: {
+    message: "I'm an object",
+  },
+};
+```
 
+### Create Table
 ```javascript
 let qry = `
-    create table dbo.test (
-        id int identity, 
-        num int, 
-        text nvarchar(100), 
-        obj nvarchar(300)
-    )
+  CREATE TABLE dbo.test (
+    id INT IDENTITY, 
+    num INT, 
+    text NVARCHAR(100), 
+    obj NVARCHAR(300)
+  )
 `;
 await db.exec(qry);
 ```
 
-### Insert data into table
+
+### Select from Table
+
+Results are always an array of records in JSON format.
 
 ```javascript
-let qry = `
-    insert into dbo.test (text) 
-    select @_text
-`;
-let params = {
-  text: "keys are converted into paramters (@_ + key)",
-};
-
-await db.exec(qry, params);
-
-let qry = `
-    insert into dbo.test (num, text, obj) 
-    select @_num, @_text, @_obj 
-`;
-let params = {
-  num: 123,
-  text: "add '@_' for each key you want to use in your query ",
-  obj: {
-    message: "im an object",
-  },
-};
-await db.exec(qry, params);
-```
-
-#
-
-### Select from table
-
-##### results are always an array of records in json format.
-
-```javascript
-let qry = "select * from dbo.test where id = @_id";
+let qry = "SELECT * FROM dbo.test WHERE id = @_id";
 let params = { id: 1 };
 
-await db.exec(qry, params);
-console.log(res);
-
-results: [
+let res = await db.exec(qry, params);
+ 
+output:
+[
   {
     id: 1,
     num: undefined,
-    text: "add '@_' for each key you want to use in your query ",
+    text: "add '@_' for each key you want to use in your query",
     obj: undefined,
   },
   {
     id: 2,
     num: 123,
-    text: "add '@_' for each key you want to use in your query ",
-    obj: { message: "im an object" },
+    text: "add '@_' for each key you want to use in your query",
+    obj: { message: "I'm an object" },
   },
 ];
 ```
 
-#
-
-##### Select first row
+OR
 
 ```javascript
-const first_row_only = true
-let res = await db.exec("select * from dbo.test", null, first_row_only);
-console.log(res);
-
-result:
- {
-    id: 1,
-    num: undefined,
-    text: "add '@_' for each key you want to use in your query ",
-    obj: undefined
-  },
+await db.for(qry, {}, async (row) => {
+  console.log(row.id);
+});
 ```
 
-#
+```javascript
+let qry = "SELECT * FROM dbo.test WHERE id IN (@_ids)";
+let params = { ids: [1, 2, 3] };
+```
 
-#
+#### Select First Row
 
-## Using with express?
+```javascript
+const first_row_only = true;
+let res = await db.exec("SELECT * FROM dbo.test", null, first_row_only);
+
+output:
+{
+  id: 1,
+  num: undefined,
+  text: "add '@_' for each key you want to use in your query",
+  obj: undefined,
+},
+```
+
+## Using with Express
 
 ```javascript
 const express = require("express");
-const asyncHandler = require("your/asyncHandler");
+const expressAsyncHandler = require("your/expressAsyncHandler");
 const router = express.Router();
 
+router.get(
+  "/some-route",
+  expressAsyncHandler(async (req, res) => {
+    let qry = `SELECT name FROM dbo.table WHERE id = @_id`;
+    let params = { id: 100 };
 
-    router.get("/pow",
-      asyncHandler(async (req: Request, res: Response) => {
-          let qry = `select name from dbo.table where id = @_id`
-          let params = { id = 100 }
-
-          db.send(req, res, qry, params);
-        })
-  );
+    db.send(req, res, qry, params);
+  })
+);
 ```
 
-db.send sends the data back to client
-
-#
-
-#
+`db.send` sends the data back to the client.
 
 ## Troubleshooting
 
-### Print errors
+### Print Errors
 
 ```javascript
 const config = {
   printErrors: true,
 };
 const db = new DB(config);
-let qry = `select top 2 hello, world from dbo.testTable`;
-let params = {
-  par: "parameter value",
-};
+
+
+let qry = `SELECT TOP 2 hello, world FROM dbo.testTable`;
 db.exec(qry, params);
-```
 
-##### result:
-
-```javascript
+output:
 ****************** MSSQL ERROR start ******************
---------  (db:dev): Invalid object name 'dbo.testTable'.  --------
+ --------  (db:XYZ): Invalid object name 'dbo.textTable'.  -------- 
 declare
-@_par NVarChar(37) = 'parameter value'
+ @_num int = 123
+, @_text NVarChar(103) = 'add '@_' for each key you want to use in your query'
+, @_obj NVarChar(max) = '{"message":"I'm an object"}'
 
-select top 2 hello, world from dbo.testTable
+select * from dbo.textTable
 ****************** MSSQL ERROR end ******************
-
 ```
+  
 
-### db.printParams
+### Print parameters
+```javascript
+db.print.params(params);
+ 
+Prints to console:
+DECLARE
+  @_num INT = 123,
+  @_text NVARCHAR(74) = 'add '@_' for each key you want to use in your query',
+  @_obj NVARCHAR(MAX) = '{"message":"I'm an object"}'
+```
+ 
+### Generate insert statement
+matches all params keys with columns in table and generates insert statement
 
 ```javascript
-const params = {
-    num: 123,
-    text: "add '@_' for each key you want to use in your query ",
-    obj: {
-      message: "im an object",
-    },
-  };
+await db.print.insert("test", params)
 
-  db.printParams(params);
+output:
+insert into test (num,text,obj)
+select @_num,@_text,@_obj
+```
+### Generate update statement
+```javascript
+await db.print.update("test", params)
 
-  prints to console:
-  declare
-     @_num int = 123
-    , @_text NVarChar(74) = 'add '@_' for each key you want to use in your query '
-    , @_obj NVarChar(max) = '{"message":"im an object"}'
+output: 
+update test set 
+    num = @_num,
+    text = @_text,
+    obj = @_obj
+where SOME_VALUE
+
 ```

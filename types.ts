@@ -1,9 +1,9 @@
-export interface ConfigProps {
+export type ConfigProps = {
   database: string;
   user: string;
   password: string;
   server: string;
-  options: any;
+  options?: any;
 
   log?: Function;
   responseHeaders?: string[];
@@ -13,10 +13,19 @@ export interface ConfigProps {
   errors?: {
     print: boolean;
   };
-}
-export interface DbProps {
+};
+export type DbProps = {
   log: Function;
   exec: Function;
   send: Function;
-  printParams: Function;
+  print: {
+    params: Function;
+    insert: Function;
+    update: Function;
+  }
+
+};
+
+export type DBParam = {
+  key: string, value: any
 }
