@@ -25,7 +25,7 @@ A simple way to interact with MS SQL Server (MSSQL) using JavaScript.
 ## Installation
 
 ```bash
-npm install live2ride/db
+npm install @live2ride/db
 ```
 
 ## Configuration
