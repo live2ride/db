@@ -1,20 +1,18 @@
 import { Request, Response } from "express";
 import find from "lodash/find";
 import forEach from "lodash/forEach";
-import isNumber from "lodash/isNumber";
+
 import map from "lodash/map";
 import sql, { Request as MSSQLRequest } from "mssql";
 import MSSQLError, { DBErrorProps } from "./classes/DBError";
 import { ConfigProps, DBParam, DbProps } from "./types";
 import { extractOpenJson } from "./utils/extract-openjson";
-
+import { inputBuilder } from "./utils/input"
 function isNumeric(value: string | number) {
   return /^-?\d+$/.test(String(value));
 }
 
-function isFloat(n: any) {
-  return !Number.isNaN(n) && n.toString().indexOf(".") !== -1;
-}
+
 
 type PlainObject = { [k: string]: any } | null | undefined;
 type QueryParameters = { [k: string]: any } | null | undefined;
@@ -111,7 +109,7 @@ export default class DB implements DbProps {
    * @return {*}  {Promise<any>}
    * @memberof DB
    */
-  async exec(query: string, params?: QueryParameters, first_row = false): Promise<any> {
+  async exec(query: string, params?: QueryParameters, first_row_only = false): Promise<any> {
     if (!this.pool) {
       const conPool = await new sql.ConnectionPool(this.config);
       this.pool = await conPool.connect();
@@ -133,9 +131,11 @@ export default class DB implements DbProps {
      */
     const execError = new Error();
     try {
-      const result = await req.query(`${this.tranHeader} ${query}`);
+      let header = this.tranHeader;
+      if (first_row_only) header += `\nset rowcount 1`
+      const result = await req.query(`${header} \n ${query}`);
 
-      return this.#get.parsedJson(result.recordset, first_row);
+      return this.#get.parsedJson(result.recordset, first_row_only);
     } catch (err: any) {
       if (err.message.includes("deadlock") || err.message.includes("unknown reason")) {
         // retry
@@ -298,104 +298,8 @@ export default class DB implements DbProps {
         return { key, value };
       })
     },
-    varcharLen(val: any) {
-      try {
-        const len = JSON.stringify(val)?.length;
-        if (len > 1000) {
-          return sql.MAX;
-        }
-        return len + 50;
-      } catch {
-        return 10;
-      }
-    },
-    input: (req?: MSSQLRequest, _key?: string, value?: any) => {
-      if (typeof (value) === "function") return;
 
-      let _value = value;
-      let sqlType: any = sql.NVarChar(sql.MAX);
-      let type = "NVarChar(max)";
-
-      if (_key === "page" && !_value) {
-        _value = 0;
-      }
-      try {
-        if (value === null || value === undefined || value === "undefined" || value === "null") {
-          _value = null;
-          sqlType =
-            sql.NVarChar(
-              40
-            ); /** keep minimum length to 40 because isnull(@_date, sysdatetime()) truncates dates to this length */
-          type = "NVarChar(40)";
-        } else if (_value.toString() === "0") {
-          sqlType = sql.Int;
-          type = "int";
-        } else if (isNumber(_value)) {
-          _value = Number(_value);
-
-          if (isFloat(_value)) {
-            // this.#consoleLog("param is float:::::::::::::", _key, _value)
-            sqlType = sql.Float;
-            type = "float";
-          } else if (_value > 2047483647) {
-            // this.#consoleLog("param is BigInt:::::::::::::", _key, _value);
-            sqlType = sql.BigInt;
-            type = "BigInt";
-          } else {
-            // this.#consoleLog("param is Int:::::::::::::", _key, _value);
-            sqlType = sql.Int;
-            type = "int";
-          }
-        } else if (_value instanceof Date) {
-          // must come before object since date is type of object
-          // _value = value.toISOString().replace("T", " ");
-          sqlType = sql.DateTime;
-          type = "DateTime";
-        } else if (typeof _value === "object" || _value instanceof Set) {
-          if (_value instanceof Set) {
-            _value = [...value];
-          }
-
-          _value = JSON.stringify(_value);
-          sqlType = sql.NVarChar(sql.MAX);
-          type = "NVarChar(max)";
-
-        } else if (typeof _value === "string") {
-          const len = this.#get.varcharLen(_value);
-          sqlType = sql.NVarChar(len);
-          type = `NVarChar(${len})`;
-        } else if (typeof _value === "boolean") {
-          /* dont use bit, use varchar instead because values true and false work with varchar  */
-          // sqlType = sql.Bit;
-          // type = "bit";
-
-          _value = JSON.stringify(_value);
-          sqlType = sql.NVarChar(10);
-          type = "NVarChar(10)";
-        } else {
-          const len = this.#get.varcharLen(_value);
-          sqlType = sql.NVarChar(len);
-          type = `NVarChar(${len})`;
-        }
-
-        if (req && _key) req.input(`_${_key}`, sqlType, _value);
-
-        // this.#consoleLog("param is sqlType:::::::::::::", _key, `(${type}) = `, _value);
-      } catch (e) {
-        this.#consoleLog("#reqInput catch value:", _value);
-        this.#consoleLog("#reqInput catch error:", e);
-
-        sqlType = sql.NVarChar(sql.MAX);
-        type = "NVarChar(max)";
-        _value = JSON.stringify(_value);
-
-        if (req && _key) {
-
-          req.input(`_${_key}`, sql.NVarChar(sql.MAX), _value);
-        }
-      }
-      return { type, value: _value };
-    },
+    input: inputBuilder,
     parsedJson: (data: PlainObject, first_row: boolean) => {
       if (data && data[0]) {
         forEach(data, (o: any) => {
@@ -432,39 +336,50 @@ export default class DB implements DbProps {
 
     },
 
-    // schema: (tableName: string)=>{
-    //   tableName = tableName.replace("..", ".dbo.")
-    //   const parts = String(tableName).split(".")
-    //   const table = parts.pop()
-    //   const schema = parts.pop()
-    //   const catalog = parts.pop()
-    //   return { table , schema, catalog }
-    // },
-    columns: async (tableName: string) => {
-      tableName = tableName.replace("..", ".dbo.")
-      const parts = String(tableName).split(".")
-      const table = parts.pop()
-      const schema = parts.pop()
-      const catalog = parts.pop()
+    schema: {
+      parts: (tableName: string) => {
+        const cleanTableName = tableName.replace("..", ".dbo.")
+        const parts = String(tableName).split(".")
+        const table = parts.pop()
+        const schema = parts.pop()
+        const catalog = parts.pop()
+        return { table, schema, catalog }
+      },
+      primaryKey: async (tableName: string) => {
+        const { table, schema, catalog } = this.#get.schema.parts(tableName);
 
-      let qry = ``
-      if (catalog) qry += `use ${catalog} \n`
-      qry += `select column_name 
+
+        let qry = ``
+        if (catalog) qry += `use ${catalog} \n`
+        qry += `select col.column_name as column_name
+from information_schema.table_constraints tab 
+inner join information_schema.key_column_usage col 
+    on tab.constraint_name = col.constraint_name
+where tab.constraint_type = 'primary key' 
+and tab.table_name = @_table`
+        if (schema) qry += `\nand tab.table_schema = @_schema`
+        const { column_name } = await this.exec(qry, { table, schema }, true) || {}
+        return column_name;
+      },
+      columns: async (tableName: string) => {
+        const { table, schema, catalog } = this.#get.schema.parts(tableName);
+
+        let qry = ``
+        if (catalog) qry += `use ${catalog} \n`
+        qry += `select column_name 
 from INFORMATION_SCHEMA.columns
 where table_name = @_table`
-      if (schema) qry += `\nand table_schema = @_schema`
-      const res = await this.exec(qry, { table, schema })
-      if (res && Array.isArray(res)) {
-        return res;
-      }
-      return undefined
+        if (schema) qry += `\nand table_schema = @_schema`
+        return await this.exec(qry, { table, schema })
+      },
     },
+
     matchingColumns: async (tableName: string, params: PlainObject) => {
       if (!params || Object.keys(params).length === 0) {
         throw new Error("Invalid params")
       }
 
-      const columns = await this.#get.columns(tableName)
+      const columns = await this.#get.schema.columns(tableName)
       if (columns) {
         const matchingColumns = columns.filter(column => column.column_name in params);
         return matchingColumns.map(c => c.column_name)
@@ -528,10 +443,11 @@ where table_name = @_table`
    */
     update: async (tableName: string, params: { [key: string]: any }) => {
       const columns = await this.#get.matchingColumns(tableName, params);
+      const primaryKey = await this.#get.schema.primaryKey(tableName);
 
       if (columns) {
         const columnsStr = columns.map(column => `${column} = @_${column}`).join(',\n');
-        const qry = `update ${tableName} set \n${columnsStr}\n where SOME_VALUE`
+        const qry = `update ${tableName} set \n${columnsStr}\n where ${primaryKey} = @_${primaryKey}`
 
         this.#consoleLog(qry);
         return qry

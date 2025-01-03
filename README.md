@@ -22,12 +22,7 @@ A simple way to interact with MS SQL Server (MSSQL) using JavaScript.
   - [Generate Insert Statement](#generate-insert-statement)
   - [Generate Update Statement](#generate-update-statement)
 
-## Installation
-
-```bash
-npm install @live2ride/db
-```
-
+ 
 ## Configuration
 
 ### Direct Configuration
