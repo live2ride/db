@@ -1,0 +1,6 @@
+.env*
+.vscode
+/webpack
+/node_modules
+/dist
+.DS_Store
