@@ -15,7 +15,7 @@ export type ConfigProps = {
   };
 };
 export type DbProps = {
-  log: Function;
+
   exec: Function;
   send: Function;
   print: {

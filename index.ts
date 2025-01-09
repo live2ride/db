@@ -8,6 +8,8 @@ import MSSQLError, { DBErrorProps } from "./classes/DBError";
 import { ConfigProps, DBParam, DbProps } from "./types";
 import { extractOpenJson } from "./utils/extract-openjson";
 import { inputBuilder } from "./utils/input"
+
+
 function isNumeric(value: string | number) {
   return /^-?\d+$/.test(String(value));
 }
@@ -30,7 +32,7 @@ export default class DB implements DbProps {
 
   private config: ConfigProps;
 
-  log: Function = console.log;
+
 
   /**
    * Creates an instance of DB.
@@ -45,7 +47,7 @@ export default class DB implements DbProps {
   constructor(_config?: Partial<ConfigProps>) {
     const { responseHeaders, tranHeader, log, errors, ...rest } = _config || {};
 
-    if (log) this.log = log;
+
     this.config = {
       database: process.env.DB_DATABASE || "",
       user: process.env.DB_USER || "",
@@ -99,7 +101,7 @@ export default class DB implements DbProps {
    * @example 
    let qry = `select * from dbo.myTable where id = @_id and type = @_type
    let data = await db.exec(qry, {id: 123, type: "some type"})
-   this.#consoleLog(data);
+   console.log(data);
   /**
    *
    *
@@ -202,9 +204,9 @@ export default class DB implements DbProps {
       return;
     }
 
-    this.#consoleLog(`****************** MSSQL ERROR start ******************`);
+    console.error(`****************** MSSQL ERROR start ******************`);
 
-    this.#consoleLog(" -------- ", `(db:${database}):`, message, " -------- ");
+    console.error(" -------- ", `(db:${database}):`, message, " -------- ");
     if (params && (params.length > 0 || Object.keys(params).length > 0)) {
       let par = params;
       if (typeof params === "string") {
@@ -215,8 +217,8 @@ export default class DB implements DbProps {
 
       this.print.params(par);
     }
-    this.#consoleLog(qry);
-    this.#consoleLog(`****************** MSSQL ERROR end ******************`);
+    console.error(qry);
+    console.error(`****************** MSSQL ERROR end ******************`);
   }
 
   /**
@@ -267,6 +269,7 @@ export default class DB implements DbProps {
   #get = {
     query: (query: string, params: any) => {
       const arrays = extractOpenJson(query)
+
       if (arrays.length > 0) {
         const pars = this.#get.keys(params);
 
@@ -276,6 +279,13 @@ export default class DB implements DbProps {
             query = query.replace(`@_${key}`, `select value from openjson(@_${key})`)
           }
         })
+      }
+      if (
+        typeof params?.limit === 'number' && !isNaN(Number(params?.limit)) &&
+        typeof params?.page === 'number' && !isNaN(Number(params?.page)) &&
+        !query.includes("fetch next")
+      ) {
+        query += `\n offset @_page rows fetch next @_limit rows only;`
       }
       return query;
     },
@@ -394,7 +404,7 @@ where table_name = @_table`
 
   test(qry: string, params: PlainObject) {
     this.print.params(params);
-    this.#consoleLog(qry);
+    console.log(qry);
   }
 
   print = {
@@ -427,9 +437,9 @@ where table_name = @_table`
         }
       });
 
-      this.#consoleLog(p);
+      console.log(p);
 
-      if (qry) this.#consoleLog(this.#get.query(qry, params));
+      if (qry) console.log(this.#get.query(qry, params));
     },
     /**
    * Prints update query to quickly match columns in table with object
@@ -449,7 +459,7 @@ where table_name = @_table`
         const columnsStr = columns.map(column => `${column} = @_${column}`).join(',\n');
         const qry = `update ${tableName} set \n${columnsStr}\n where ${primaryKey} = @_${primaryKey}`
 
-        this.#consoleLog(qry);
+        console.log(qry);
         return qry
       }
     },
@@ -469,7 +479,7 @@ where table_name = @_table`
       if (columns) {
         const columnsStr = columns.map(column => `@_${column}`).join(',');
         const qry = `insert into ${tableName} (${columns.join(",")})\nselect ${columnsStr}`
-        this.#consoleLog(qry);
+        console.log(qry);
         return qry
       }
     }
@@ -477,12 +487,4 @@ where table_name = @_table`
 
 
 
-  #consoleLog(...props: any) {
-    try {
-      this.log(...props);
-    } catch {
-      this.log = console.log;
-      this.log(...props);
-    }
-  }
 }
