@@ -121,6 +121,7 @@ export default class DB implements DbProps {
     }
 
     let req: MSSQLRequest = this.pool.request();
+    if (params?.limit && !params.page) params.page = 0
 
     req = this.#get.params(req, params);
 
@@ -323,9 +324,9 @@ export default class DB implements DbProps {
       if (typeof params?.limit === 'number' && !isNaN(Number(params?.limit))
         && !query.includes("fetch next")
       ) {
-        if (!params.page) params.page = 0;
-        query += `\noffset @_page * @_limit rows fetch next @_limit rows only`
+        query += `\nOFFSET @_page * @_limit ROWS FETCH NEXT @_limit ROWS ONLY;`
       }
+
       return query;
     },
     params: (req: MSSQLRequest, params?: PlainObject): MSSQLRequest => {
