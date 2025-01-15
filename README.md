@@ -46,6 +46,7 @@ DB_DATABASE=my-database-name
 DB_USER=demo-user
 DB_PASSWORD=demo-password
 DB_SERVER=server-name
+
 ```
 
 Then initialize without parameters:
@@ -202,9 +203,13 @@ router.get(
 ### Print Errors
 
 ```javascript
-const config = {
-  printErrors: true,
-};
+import debug from "debug"
+debug.enable("db")
+or
+.env
+DEBUG=db 
+
+
 const db = new DB(config);
 
 let qry = `SELECT TOP 2 hello, world FROM dbo.testTable`;

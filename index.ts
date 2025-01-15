@@ -8,8 +8,14 @@ import MSSQLError, { DBErrorProps } from "./classes/DBError";
 import { ConfigProps, DBParam, DbProps } from "./types";
 import { extractOpenJson } from "./utils/extract-openjson";
 import { inputBuilder } from "./utils/input"
+import { getOrderBy } from "src/modules/db/utils/move-orderby";
+import debug from "debug";
 
 
+const isDefined = (value: any): boolean => Boolean(value);// const isDefined = (value: any): boolean => value !== undefined && value !== null;
+const sleep = async (ms: number): Promise<void> => {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
 function isNumeric(value: string | number) {
   return /^-?\d+$/.test(String(value));
 }
@@ -20,9 +26,6 @@ type PlainObject = { [k: string]: any } | null | undefined;
 type QueryParameters = { [k: string]: any } | null | undefined;
 
 export default class DB implements DbProps {
-  private errors: {
-    print: boolean;
-  };
 
   private responseHeaders: string[];
 
@@ -40,7 +43,6 @@ export default class DB implements DbProps {
    *
    * @param {string[]} [responseHeaders] - headers to be injected in express response
    * @param {string} [tranHeader] - additional transaction header which at the begining of each query. ex: "set nocount on "
-   * @param {boolean} [errors.print] - console log error query with parameters for easy troubleshooting. ( uses log function )
    * @param {Function} [log] - your function to log to console: default condole.log but you can use colors etc...
    * @memberof DB
    */
@@ -66,16 +68,14 @@ export default class DB implements DbProps {
       ...rest,
     };
 
-    const isDev = ["development", "dev"].includes(String(process.env.NODE_ENV));
-    this.errors = {
-      print: !!isDev,
-      ...(errors || {}),
-    };
+
+
 
     this.responseHeaders = responseHeaders || [];
     this.tranHeader = tranHeader || `SET TRANSACTION ISOLATION LEVEL READ UNCOMMITTED`; //  \nset nocount on; \n`;
     this.pool = null;
   }
+
 
 
   #reply(req: Request, res: Response, data: any) {
@@ -101,7 +101,7 @@ export default class DB implements DbProps {
    * @example 
    let qry = `select * from dbo.myTable where id = @_id and type = @_type
    let data = await db.exec(qry, {id: 123, type: "some type"})
-   console.log(data);
+   console.info(data);
   /**
    *
    *
@@ -111,7 +111,10 @@ export default class DB implements DbProps {
    * @return {*}  {Promise<any>}
    * @memberof DB
    */
-  async exec(query: string, params?: QueryParameters, first_row_only = false): Promise<any> {
+  async exec<T = any>(query: string, params?: QueryParameters, firstRecordOnly = false): Promise<T> {
+    return this.#exec(query, params, firstRecordOnly);
+  }
+  async #exec<T = any>(query: string, params?: QueryParameters, firstRecordOnly = false, retryCount = 0): Promise<T> {
     if (!this.pool) {
       const conPool = await new sql.ConnectionPool(this.config);
       this.pool = await conPool.connect();
@@ -120,7 +123,6 @@ export default class DB implements DbProps {
     let req: MSSQLRequest = this.pool.request();
 
     req = this.#get.params(req, params);
-
 
     /** replace  and id in (@_id) with  and id in (select value from openjson(@_id)) */
     query = this.#get.query(query, params)
@@ -131,19 +133,25 @@ export default class DB implements DbProps {
      * if we use the actual error in catch block, it creates stack trace to MSSQL
      * and most likely error is in the query
      */
-    const execError = new Error();
+
     try {
       let header = this.tranHeader;
-      if (first_row_only) header += `\nset rowcount 1`
+
+      if (firstRecordOnly) header += `\nset rowcount 1`
+
       const result = await req.query(`${header} \n ${query}`);
 
-      return this.#get.parsedJson(result.recordset, first_row_only);
+      return this.#get.parsedJson<T>(result.recordset, firstRecordOnly) as T
     } catch (err: any) {
+
       if (err.message.includes("deadlock") || err.message.includes("unknown reason")) {
         // retry
-        return this.exec(query, params);
+        if (retryCount < 5) {
+          await sleep(150)
+          return this.#exec<T>(query, params, firstRecordOnly, retryCount + 1);
+        }
       }
-
+      const execError = new Error();
       /** setting query error message */
       execError.message = err.message;
 
@@ -155,7 +163,7 @@ export default class DB implements DbProps {
         lineNumber: err.lineNumber,
         serverName: err?.serverName,
         database: this.config.database,
-        message: err.message || "invalid err.message execute",
+        message: err.message || "invalid err.message",
         qry: query,
         params,
 
@@ -163,29 +171,63 @@ export default class DB implements DbProps {
         // err.stack.split("\n").slice(0, 2).join("\n") + "\n" + execError.stack,
       };
 
-      if (this.errors?.print) {
-        this.#consoleLogError(info);
-      }
+
+      this.#consoleLogError(info);
+
       throw new MSSQLError(info);
       // error.stack = execError.stack;
       // throw err;
     }
   }
 
-  silent = {
-    exec: async (query: string, params?: QueryParameters, first_row = false) => {
-      try {
-        return await this.exec(query, params, first_row);
-      } catch {/** */ }
+  // The `where` function builds and executes the query
+
+  async where<T = any>(
+    query: string,
+    props: QueryParameters,
+    filterFields: QueryParameters
+  ): Promise<T | undefined> {
+
+    const whereClauses: string[] = [];
+    if (filterFields) {
+      // Check for an ORDER BY clause
+
+
+      for (const [field, value] of Object.entries(filterFields)) {
+        if (isDefined(value)) {
+          whereClauses.push(`${field} = @_${field}`);
+        }
+      }
+      const hasWhere = /\bWHERE\b/i.test(query);
+
+      if (whereClauses.length > 0) {
+        const additionalWhere =
+          whereClauses.length > 1
+            ? `(${whereClauses.join(' AND ')})` // Wrap in parentheses if more than one field
+            : whereClauses.join(' AND ');
+
+        const orderByClause = getOrderBy(query);
+        if (orderByClause) {
+          query = query.replace(orderByClause, '');
+        }
+        query += hasWhere
+          ? ` AND ${additionalWhere}`
+          : ` WHERE ${additionalWhere}`;
+        query += ` ${orderByClause || ""}`
+
+
+      }
+
     }
+    return this.exec<T>(query, { ...props, ...filterFields })
   }
 
-  async for(query: string,
+  async for<T = any>(query: string,
     params: QueryParameters | null | undefined,
-    fun: (row: any) => Promise<void>
+    fun: (row: any) => Promise<T>
   ): Promise<any> {
-    const rows = await this.exec(query, params);
-    if (rows && rows.length > 0) {
+    const rows: any = await this.exec<T>(query, params);
+    if (rows && rows?.length > 0) {
       for (const r of rows) {
         await fun(r);
       }
@@ -200,25 +242,20 @@ export default class DB implements DbProps {
     if ([2627, 2601].includes(number)) {
       // 2627 "primary-key-violation"
       // 2601 "duplicate-key"
-      // console.log("consoleLogError includes return", );
+      // console.info("consoleLogError includes return", );
       return;
     }
+    if (debug.enabled("db")) {
+      console.info("\x1b[31m", `****************** MSSQL ERROR start ******************`);
 
-    console.error(`****************** MSSQL ERROR start ******************`);
+      console.info("\x1b[31m", " -------- ", `(db:${database}):`, message, " -------- ");
 
-    console.error(" -------- ", `(db:${database}):`, message, " -------- ");
-    if (params && (params.length > 0 || Object.keys(params).length > 0)) {
-      let par = params;
-      if (typeof params === "string") {
-        try {
-          par = JSON.parse(params);
-        } catch { /** */ }
-      }
-
-      this.print.params(par);
+      const par = this.print.get.params(params)
+      console.info("\x1b[33m", par);
+      console.info("\x1b[33m", qry);
+      console.info("\x1b[31m", `****************** MSSQL ERROR end ******************`);
     }
-    console.error(qry);
-    console.error(`****************** MSSQL ERROR end ******************`);
+
   }
 
   /**
@@ -231,7 +268,7 @@ export default class DB implements DbProps {
    * @returns {Promise<void>} - array of objects
    */
   async send(req: Request, res: Response, qry: string, params?: PlainObject): Promise<void> {
-    const data = await this.exec(qry, params);
+    const data: any = await this.exec(qry, params);
 
     // if(req instanceof Request){
     if (req.accepts("json")) {
@@ -280,12 +317,14 @@ export default class DB implements DbProps {
           }
         })
       }
-      if (
-        typeof params?.limit === 'number' && !isNaN(Number(params?.limit)) &&
-        typeof params?.page === 'number' && !isNaN(Number(params?.page)) &&
-        !query.includes("fetch next")
+
+
+
+      if (typeof params?.limit === 'number' && !isNaN(Number(params?.limit))
+        && !query.includes("fetch next")
       ) {
-        query += `\n offset @_page rows fetch next @_limit rows only;`
+        if (!params.page) params.page = 0;
+        query += `\noffset @_page * @_limit rows fetch next @_limit rows only`
       }
       return query;
     },
@@ -310,11 +349,11 @@ export default class DB implements DbProps {
     },
 
     input: inputBuilder,
-    parsedJson: (data: PlainObject, first_row: boolean) => {
+    parsedJson: <T = any>(data: T, firstRecordOnly: boolean): T | undefined => {
       if (data && data[0]) {
         forEach(data, (o: any) => {
           // parse all the objects
-          Object.keys(o).forEach((key, index) => {
+          Object.keys(o).forEach((key) => {
             const str = o[key];
 
             if (str === null) {
@@ -325,20 +364,20 @@ export default class DB implements DbProps {
               } else {
                 try {
                   const nv = JSON.parse(o[key]);
-                  o = Object.assign(o, { [key]: nv }); // this works in react and not in nodejs,
+                  o = Object.assign(o, { [key]: nv });
                 } catch {/** */ }
               }
             }
           });
         });
 
-        if (first_row) {
+        if (firstRecordOnly) {
           return data[0];
         }
         return data;
 
       }
-      if (first_row) {
+      if (firstRecordOnly) {
         return undefined;
       }
       return data;
@@ -368,7 +407,7 @@ inner join information_schema.key_column_usage col
 where tab.constraint_type = 'primary key' 
 and tab.table_name = @_table`
         if (schema) qry += `\nand tab.table_schema = @_schema`
-        const { column_name } = await this.exec(qry, { table, schema }, true) || {}
+        const { column_name } = await this.exec<any>(qry, { table, schema }, true) || {}
         return column_name;
       },
       columns: async (tableName: string) => {
@@ -380,7 +419,7 @@ and tab.table_name = @_table`
 from INFORMATION_SCHEMA.columns
 where table_name = @_table`
         if (schema) qry += `\nand table_schema = @_schema`
-        return await this.exec(qry, { table, schema })
+        return this.exec<{ column_name: string }[]>(qry, { table, schema })
       },
     },
 
@@ -404,42 +443,44 @@ where table_name = @_table`
 
   test(qry: string, params: PlainObject) {
     this.print.params(params);
-    console.log(qry);
+    console.info(qry);
   }
 
   print = {
+    get: {
+      params: (params: PlainObject) => {
+        let declaration = "declare \n";
+        let separator = "";
+        const parameters = this.#get.keys(params);
+
+        forEach(parameters, (param: any) => {
+          const result = this.#get.input(undefined, param.key, param.value);
+          if (result) {
+            const { value, type } = result;
+            const formattedValue = ["int", "BigInt", "float"].includes(String(type))
+              ? value
+              : value === null
+                ? value
+                : `'${value}'`;
+
+            declaration += `  ${separator}@_${param.key} ${type} = ${formattedValue} \n`;
+            separator = ",";
+          }
+        });
+        return declaration;
+      }
+    },
     /**
    * Prints params object as sql parameters for testing.
    *
    * @param {Object} params
    */
     params: (params: PlainObject, qry?: string) => {
-      let p = "declare \n";
+      const p = this.print.get.params(params);
 
-      let comma = "";
-      const pars = this.#get.keys(params);
+      console.info(p);
 
-      forEach(pars, (par: any) => {
-
-        const res = this.#get.input(undefined, par.key, par.value);
-        if (res) {
-          const { value, type } = res;
-          if (value?.length > 1200) {
-            // value = "this value is too large....";
-          }
-          const strValue = ["int", "BigInt", "float"].includes(String(type))
-            ? value
-            : value === null
-              ? value
-              : `'${value}'`;
-          p += `${comma} @_${par.key} ${type} = ${strValue} \n`;
-          comma = ",";
-        }
-      });
-
-      console.log(p);
-
-      if (qry) console.log(this.#get.query(qry, params));
+      if (qry) console.info(this.#get.query(qry, params));
     },
     /**
    * Prints update query to quickly match columns in table with object
@@ -459,7 +500,7 @@ where table_name = @_table`
         const columnsStr = columns.map(column => `${column} = @_${column}`).join(',\n');
         const qry = `update ${tableName} set \n${columnsStr}\n where ${primaryKey} = @_${primaryKey}`
 
-        console.log(qry);
+        console.info(qry);
         return qry
       }
     },
@@ -479,7 +520,7 @@ where table_name = @_table`
       if (columns) {
         const columnsStr = columns.map(column => `@_${column}`).join(',');
         const qry = `insert into ${tableName} (${columns.join(",")})\nselect ${columnsStr}`
-        console.log(qry);
+        console.info(qry);
         return qry
       }
     }
