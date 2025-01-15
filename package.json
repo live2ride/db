@@ -1,6 +1,6 @@
 {
     "name": "@live2ride/db",
-    "version": "1.3.3",
+    "version": "1.3.4",
     "description": "Simplify MSSQL operations",
     "scripts": {
         "test": ""
