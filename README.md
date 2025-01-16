@@ -1,102 +1,34 @@
 # MS SQL Server Interaction Library
 
-A simple way to interact with MS SQL Server (MSSQL) using JavaScript.
+A straightforward JavaScript library for interacting with MS SQL Server (MSSQL).
 
 ## Table of Contents
 
-- [Installation](#installation)
+- [Parameters in Examples](#parameters-in-examples)
+- [Quick Start](#quick-start)
 - [Configuration](#configuration)
   - [Direct Configuration](#direct-configuration)
   - [Environment Variables](#environment-variables)
-  - [Additional Config Options](#additional-config-options)
+  - [Additional Configuration Options](#additional-configuration-options)
 - [Usage](#usage)
   - [Executing Queries](#executing-queries)
 - [Examples](#examples)
   - [Create Table](#create-table)
   - [Select from Table](#select-from-table)
   - [Select First Row](#select-first-row)
-- [Using with Express](#using-with-express)
+- [Integration with Express](#integration-with-express)
 - [Troubleshooting](#troubleshooting)
   - [Print Errors](#print-errors)
   - [Print Parameters](#print-parameters)
   - [Generate Insert Statement](#generate-insert-statement)
   - [Generate Update Statement](#generate-update-statement)
 
- 
-## Configuration
+## Parameters in Examples
 
-### Direct Configuration
-
-```javascript
-const dbConfig = {
-  database: "database",
-  user: "user",
-  password: "password",
-  server: "192.168.0.1",
-};
-const db = new DB(dbConfig);
-```
-
-### Environment Variables
-
-Alternatively, set variables in your `.env` file:
-
-```env
-DB_DATABASE=my-database-name
-DB_USER=demo-user
-DB_PASSWORD=demo-password
-DB_SERVER=server-name
-
-```
-
-Then initialize without parameters:
+When using this library, parameters are defined as key-value pairs. Prefix each key with `@_` when referencing them in your SQL queries.
 
 ```javascript
-const db = new DB();
-```
-
-### Additional Config Options
-
-- **tranHeader**: Transaction header. String added before each query.
-- **responseHeaders**: Array of headers added to response when using `db.send`.
-- **errors**:
-  - **print**: Prints errors in console with statement prepared for testing. `true` in development.
-  - **includeInResponse**: Includes errors in the response.
-
-```javascript
-const dbConfig = {
-  tranHeader: "set nocount on;",
-  errors: {
-    print: true,
-    includeInResponse: true,
-  },
-  responseHeaders: [
-    ["Access-Control-Allow-Origin", "*"],
-    ["Access-Control-Allow-Methods", "GET, POST, OPTIONS, PUT, PATCH, DELETE"],
-  ],
-};
-```
-
-## Usage
-
-### Executing Queries
-
-**exec**: Executes a query with parameters and returns results.
-
-```javascript
-await db.exec(
-  query, // string (any SQL statement)
-  parameters, // JavaScript object or array
-  first_row_only // boolean (default false)
-);
-```
-
-## Examples
-
-### Parameters Used in Examples
-
-```javascript
-let params = {
+const params = {
   num: 123,
   text: "add '@_' for each key you want to use in your query",
   obj: {
@@ -105,31 +37,114 @@ let params = {
 };
 ```
 
-### Create Table
+## Quick Start
+
+Here's a short example demonstrating basic operations such as executing queries, inserting, and updating records.
 
 ```javascript
-let qry = `
+await db.exec('SELECT * FROM dbo.test WHERE num = @_num', { num: 1 });
+await db.exec('SELECT * FROM dbo.test WHERE num IN (@_nums)', { nums: [1, 2, 3] });
+await db.insert("dbo.test", { num: 1, obj: { key: "value" } });
+await db.update("dbo.test", { num: 1, obj: { key: "value2" } });
+```
+
+## Configuration
+
+### Direct Configuration
+
+You can configure the database connection directly by passing a configuration object when initializing the `DB` instance.
+
+```javascript
+const dbConfig = {
+  database: "your-database",
+  user: "your-username",
+  password: "your-password",
+  server: "192.168.0.1",
+};
+
+const db = new DB(dbConfig);
+```
+
+### Environment Variables
+
+Alternatively, you can set your configuration parameters in a `.env` file for better security and flexibility.
+
+```env
+DB_DATABASE=your-database-name
+DB_USER=your-username
+DB_PASSWORD=your-password
+DB_SERVER=your-server-name
+```
+
+Initialize the `DB` instance without passing any parameters, and it will automatically use the environment variables.
+
+```javascript
+const db = new DB();
+```
+
+### Additional Configuration Options
+
+You can further customize the behavior of the library using additional configuration options:
+
+- **tranHeader**: A transaction header string added before each query.
+- **responseHeaders**: An array of headers to include in responses when using `db.send`.
+
+```javascript
+const dbConfig = {
+  tranHeader: "SET NOCOUNT ON;",
+  responseHeaders: [
+    ["Access-Control-Allow-Origin", "*"],
+    ["Access-Control-Allow-Methods", "GET, POST, OPTIONS, PUT, PATCH, DELETE"],
+  ],
+};
+
+const db = new DB(dbConfig);
+```
+
+## Usage
+
+### Executing Queries
+
+Use the `exec` method to execute SQL queries with parameters. It returns the query results in array format.
+
+```javascript
+await db.exec(
+  query,         // String: Any valid SQL statement
+  parameters,    // Object or Array: { key1: "value1" } or ["value1", "value2"]
+  firstRowOnly   // Boolean (optional): If true, returns only the first row (default is false)
+);
+```
+
+## Examples
+
+### Create Table
+
+Create a new table named `dbo.test` with various columns.
+
+```javascript
+const createTableQuery = `
   CREATE TABLE dbo.test (
-    id INT IDENTITY, 
+    id INT IDENTITY PRIMARY KEY, 
     num INT, 
     text NVARCHAR(100), 
     obj NVARCHAR(300)
   )
 `;
-await db.exec(qry);
+
+await db.exec(createTableQuery);
 ```
 
 ### Select from Table
 
-Results are always an array of records in JSON format.
+Retrieve records from the `dbo.test` table. The results are returned as an array of JSON objects.
 
 ```javascript
-let qry = "SELECT * FROM dbo.test WHERE id = @_id";
-let params = { id: 1 };
+const selectQuery = "SELECT * FROM dbo.test WHERE id = @_id";
+const params = { id: 1 };
 
-let res = await db.exec(qry, params);
+const results = await db.exec(selectQuery, params);
 
-console.log(res);
+console.log(results);
 /*
 [
   {
@@ -148,26 +163,32 @@ console.log(res);
 */
 ```
 
-Or using `for`:
+Alternatively, you can iterate over the results using the `for` method:
 
 ```javascript
-await db.for(qry, {}, async (row) => {
+await db.for(selectQuery, { id: 1 }, async (row) => {
   console.log(row.id);
 });
 ```
 
+For queries with multiple IDs:
+
 ```javascript
-let qry = "SELECT * FROM dbo.test WHERE id IN (@_ids)";
-let params = { ids: [1, 2, 3] };
+const multiSelectQuery = "SELECT * FROM dbo.test WHERE id IN (@_ids)";
+const multiParams = { ids: [1, 2, 3] };
+
+const multiResults = await db.exec(multiSelectQuery, multiParams);
 ```
 
 ### Select First Row
 
-```javascript
-const first_row_only = true;
-let res = await db.exec("SELECT * FROM dbo.test", null, first_row_only);
+Retrieve only the first row from a query result by setting the `firstRowOnly` parameter to `true`.
 
-console.log(res);
+```javascript
+const firstRowOnly = true;
+const firstRow = await db.exec("SELECT * FROM dbo.test", null, firstRowOnly);
+
+console.log(firstRow);
 /*
 {
   id: 1,
@@ -178,64 +199,77 @@ console.log(res);
 */
 ```
 
-## Using with Express
+## Integration with Express
+
+Integrate the library with an Express.js server to handle database operations within your routes.
 
 ```javascript
 const express = require("express");
-const expressAsyncHandler = require("your/expressAsyncHandler");
+const expressAsyncHandler = require("your/expressAsyncHandler"); // Replace with your actual async handler
 const router = express.Router();
 
 router.get(
   "/some-route",
   expressAsyncHandler(async (req, res) => {
-    let qry = `SELECT name FROM dbo.table WHERE id = @_id`;
-    let params = { id: 100 };
+    const query = `SELECT name FROM dbo.table WHERE id = @_id`;
+    const params = { id: 100 };
 
-    db.send(req, res, qry, params);
+    db.send(req, res, query, params);
   })
 );
+
+module.exports = router;
 ```
 
-`db.send` sends the data back to the client.
+The `db.send` method sends the query results back to the client.
 
 ## Troubleshooting
 
 ### Print Errors
 
+Enable detailed error logging to help debug issues.
+
+**Using the `debug` library:**
+
 ```javascript
-import debug from "debug"
-debug.enable("db")
-or
-.env
-DEBUG=db 
+import debug from "debug";
+debug.enable("db");
 
-
+// Your database operations
 const db = new DB(config);
 
-let qry = `SELECT TOP 2 hello, world FROM dbo.testTable`;
-db.exec(qry, params);
+const query = `SELECT TOP 2 hello, world FROM dbo.testTable`;
+db.exec(query, params);
 
 /*
 Output:
 ****************** MSSQL ERROR start ******************
- --------  (db:XYZ): Invalid object name 'dbo.textTable'.  -------- 
-declare
- @_num int = 123
-, @_text NVarChar(103) = 'add '@_' for each key you want to use in your query'
-, @_obj NVarChar(max) = '{"message":"I'm an object"}'
-
-select * from dbo.textTable
+ --------  (db:XYZ): Invalid object name 'dbo.textTable'. -------- 
+DECLARE
+  @_num INT = 123,
+  @_text NVARCHAR(103) = 'add '@_' for each key you want to use in your query',
+  @_obj NVARCHAR(MAX) = '{"message":"I'm an object"}'
+  
+SELECT * FROM dbo.textTable
 ****************** MSSQL ERROR end ******************
 */
 ```
 
+**Or set the `DEBUG` environment variable in your `.env` file:**
+
+```env
+DEBUG=db
+```
+
 ### Print Parameters
+
+View the parameters being sent with your queries for verification.
 
 ```javascript
 db.print.params(params);
- 
+
 /*
-Prints to console:
+Console Output:
 DECLARE
   @_num INT = 123,
   @_text NVARCHAR(74) = 'add '@_' for each key you want to use in your query',
@@ -245,29 +279,34 @@ DECLARE
 
 ### Generate Insert Statement
 
-Matches all params keys with columns in table and generates insert statement.
+Automatically generate an `INSERT` statement that matches the parameter keys with the table columns.
 
 ```javascript
 await db.print.insert("test", params);
 
 /*
 Output:
-insert into test (num, text, obj)
-select @_num, @_text, @_obj
+INSERT INTO test (num, text, obj)
+SELECT @_num, @_text, @_obj
 */
 ```
 
 ### Generate Update Statement
+
+Automatically generate an `UPDATE` statement based on the provided parameters.
 
 ```javascript
 await db.print.update("test", params);
 
 /*
 Output:
-update test set 
-    num = @_num,
-    text = @_text,
-    obj = @_obj
-where SOME_VALUE
+UPDATE test SET 
+  num = @_num,
+  text = @_text,
+  obj = @_obj
+WHERE SOME_VALUE
 */
 ```
+
+---
+ 

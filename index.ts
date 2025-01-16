@@ -12,6 +12,7 @@ import { getOrderBy } from "src/modules/db/utils/move-orderby";
 import debug from "debug";
 
 
+
 const isDefined = (value: any): boolean => Boolean(value);// const isDefined = (value: any): boolean => value !== undefined && value !== null;
 const sleep = async (ms: number): Promise<void> => {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -22,8 +23,20 @@ function isNumeric(value: string | number) {
 
 
 
-type PlainObject = { [k: string]: any } | null | undefined;
-type QueryParameters = { [k: string]: any } | null | undefined;
+
+type QueryParameters = { [k: string]: any }
+
+type StorageType = {
+  [key: string]: {
+    primaryKey?: string,
+    isIdentity?: boolean,
+    columns?: { column_name: string }[],
+  }
+}
+/** save tables metadata so we dont have to fetch from db every time,
+ * implement other storage solution like redis
+ */
+let STORAGE: StorageType = {}
 
 export default class DB implements DbProps {
 
@@ -111,10 +124,10 @@ export default class DB implements DbProps {
    * @return {*}  {Promise<any>}
    * @memberof DB
    */
-  async exec<T = any>(query: string, params?: QueryParameters, firstRecordOnly = false): Promise<T> {
+  async exec<T = any>(query: string, params?: QueryParameters | null, firstRecordOnly = false): Promise<T> {
     return this.#exec(query, params, firstRecordOnly);
   }
-  async #exec<T = any>(query: string, params?: QueryParameters, firstRecordOnly = false, retryCount = 0): Promise<T> {
+  async #exec<T = any>(query: string, params?: QueryParameters | null, firstRecordOnly = false, retryCount = 0): Promise<T> {
     if (!this.pool) {
       const conPool = await new sql.ConnectionPool(this.config);
       this.pool = await conPool.connect();
@@ -181,7 +194,14 @@ export default class DB implements DbProps {
     }
   }
 
-  // The `where` function builds and executes the query
+  async update<T = any>(tableName: string, params: QueryParameters): Promise<T> {
+    const qry = await this.#get.update(tableName, params)
+    return this.#exec<T>(qry, params);
+  }
+  async insert<T = any>(tableName: string, params: QueryParameters): Promise<T> {
+    const qry = await this.#get.insert(tableName, params)
+    return this.#exec<T>(qry, params);
+  }
 
   async where<T = any>(
     query: string,
@@ -225,8 +245,8 @@ export default class DB implements DbProps {
 
   async for<T = any>(query: string,
     params: QueryParameters | null | undefined,
-    fun: (row: any) => Promise<T>
-  ): Promise<any> {
+    fun: (row: T) => Promise<T>
+  ): Promise<T> {
     const rows: any = await this.exec<T>(query, params);
     if (rows && rows?.length > 0) {
       for (const r of rows) {
@@ -251,7 +271,7 @@ export default class DB implements DbProps {
 
       console.info("\x1b[31m", " -------- ", `(db:${database}):`, message, " -------- ");
 
-      const par = this.print.get.params(params)
+      const par = this.print.get.params(params as any)
       console.info("\x1b[33m", par);
       console.info("\x1b[33m", qry);
       console.info("\x1b[31m", `****************** MSSQL ERROR end ******************`);
@@ -268,7 +288,7 @@ export default class DB implements DbProps {
    * @param {object} params - json object whose keys are converted to sql parameters. in sql use @_ + key. example select * from table where someid = @_myid {myid: 123}
    * @returns {Promise<void>} - array of objects
    */
-  async send(req: Request, res: Response, qry: string, params?: PlainObject): Promise<void> {
+  async send(req: Request, res: Response, qry: string, params?: QueryParameters | null): Promise<void> {
     const data: any = await this.exec(qry, params);
 
     // if(req instanceof Request){
@@ -293,11 +313,11 @@ export default class DB implements DbProps {
 
   }
 
-  toTEXT(req: Request, res: Response, data: PlainObject) {
+  toTEXT(req: Request, res: Response, data: QueryParameters) {
     this.#reply(req, res, data);
   }
 
-  toJSON(req: Request, res: Response, data: PlainObject) {
+  toJSON(req: Request, res: Response, data: QueryParameters) {
     const jsonData = JSON.stringify(data);
     this.#reply(req, res, jsonData);
   }
@@ -305,6 +325,34 @@ export default class DB implements DbProps {
 
 
   #get = {
+    insert: async (tableName: string, params: QueryParameters) => {
+      const columns = await this.#get.matchingColumns(tableName, params, "");
+      if (!columns) {
+        throw new Error("Invalid table columns");
+      }
+
+      const columnsStr = columns.map(column => `@_${column}`).join(',');
+      const qry = `insert into ${tableName} (${columns.join(",")}) values (${columnsStr})`
+      return qry;
+    },
+    update: async (tableName: string, params: QueryParameters) => {
+
+      const primaryKey = await this.#get.schema.primaryKey(tableName);
+      if (!primaryKey) throw new Error(`Table ${tableName} has no primary key`);
+      const columns = await this.#get.matchingColumns(tableName, params, primaryKey);
+
+      if (!columns) {
+        throw new Error(`Table ${tableName} has no matching columns`);
+      }
+
+      const columnsStr = columns.map(column => `${column} = @_${column}`).join(',\n');
+      let qry = `update ${tableName} set
+      ${columnsStr}
+      where ${primaryKey} = @_${primaryKey}`
+
+      return qry
+
+    },
     query: (query: string, params: any) => {
       const arrays = extractOpenJson(query)
 
@@ -329,7 +377,7 @@ export default class DB implements DbProps {
 
       return query;
     },
-    params: (req: MSSQLRequest, params?: PlainObject): MSSQLRequest => {
+    params: (req: MSSQLRequest, params?: QueryParameters | null): MSSQLRequest => {
       if (params) {
 
         const pars = this.#get.keys(params);
@@ -342,7 +390,7 @@ export default class DB implements DbProps {
       }
       return req;
     },
-    keys: (params: PlainObject): DBParam[] => {
+    keys: (params: QueryParameters): DBParam[] => {
       // @ts-ignore
       return map(params, (value: string, key: string) => {
         return { key, value };
@@ -396,60 +444,76 @@ export default class DB implements DbProps {
         return { table, schema, catalog }
       },
       primaryKey: async (tableName: string) => {
-        const { table, schema, catalog } = this.#get.schema.parts(tableName);
+        const primaryKey = STORAGE[tableName]?.primaryKey;
+        if (primaryKey) return primaryKey;
 
+
+        const { table, schema, catalog } = this.#get.schema.parts(tableName);
 
         let qry = ``
         if (catalog) qry += `use ${catalog} \n`
-        qry += `select col.column_name as column_name
+        qry += `select col.column_name as column_name,
+        COLUMNPROPERTY(OBJECT_ID(col.TABLE_CATALOG +'.' +col.TABLE_SCHEMA +'.'+  col.TABLE_NAME), col.COLUMN_NAME, 'IsIdentity') AS isIdentity
 from information_schema.table_constraints tab 
 inner join information_schema.key_column_usage col 
     on tab.constraint_name = col.constraint_name
 where tab.constraint_type = 'primary key' 
 and tab.table_name = @_table`
         if (schema) qry += `\nand tab.table_schema = @_schema`
-        const { column_name } = await this.exec<any>(qry, { table, schema }, true) || {}
+
+        const { column_name, isIdentity } = await this.exec<any>(qry, { table, schema }, true) || {}
+
+        if (!STORAGE[tableName]) STORAGE[tableName] = {}
+        STORAGE[tableName] = {
+          ...STORAGE[tableName],
+          primaryKey: column_name,
+          isIdentity
+        }
+
         return column_name;
       },
-      columns: async (tableName: string) => {
+      columns: async (tableName: string): Promise<{ column_name: string }[]> => {
+        const tableColumns = STORAGE[tableName]?.columns;
+        if (tableColumns) return tableColumns;
+
         const { table, schema, catalog } = this.#get.schema.parts(tableName);
 
-        let qry = ``
-        if (catalog) qry += `use ${catalog} \n`
-        qry += `select column_name 
-from INFORMATION_SCHEMA.columns
-where table_name = @_table`
-        if (schema) qry += `\nand table_schema = @_schema`
-        return this.exec<{ column_name: string }[]>(qry, { table, schema })
+        let qry = '';
+        if (catalog) qry += `use ${catalog} \n`;
+        qry += `select column_name from INFORMATION_SCHEMA.columns where table_name = @_table`;
+        if (schema) qry += `\nand table_schema = @_schema`;
+
+        const res = await this.exec<{ column_name: string }[]>(qry, { table, schema });
+
+        if (!STORAGE[tableName]) STORAGE[tableName] = {}
+        STORAGE[tableName].columns = res
+        return res;
       },
     },
 
-    matchingColumns: async (tableName: string, params: PlainObject) => {
-      if (!params || Object.keys(params).length === 0) {
-        throw new Error("Invalid params")
+    matchingColumns: async (tableName: string, parameters: QueryParameters, primaryKey: string): Promise<string[] | undefined> => {
+      if (!parameters || Object.keys(parameters).length === 0) {
+        throw new Error("Invalid parameters");
       }
 
-      const columns = await this.#get.schema.columns(tableName)
-      if (columns) {
-        const matchingColumns = columns.filter(column => column.column_name in params);
-        return matchingColumns.map(c => c.column_name)
-      }
-      return undefined
-    }
+      const columns = await this.#get.schema.columns(tableName);
+      const matchedColumns = columns?.filter(({ column_name }) => column_name in parameters && column_name !== primaryKey);
+      return matchedColumns?.map(({ column_name }) => column_name);
+    },
   }
 
 
 
 
 
-  test(qry: string, params: PlainObject) {
+  test(qry: string, params: QueryParameters) {
     this.print.params(params);
     console.info(qry);
   }
 
   print = {
     get: {
-      params: (params: PlainObject) => {
+      params: (params: QueryParameters) => {
         let declaration = "declare \n";
         let separator = "";
         const parameters = this.#get.keys(params);
@@ -476,7 +540,7 @@ where table_name = @_table`
    *
    * @param {Object} params
    */
-    params: (params: PlainObject, qry?: string) => {
+    params: (params: QueryParameters, qry?: string) => {
       const p = this.print.get.params(params);
 
       console.info(p);
@@ -493,17 +557,10 @@ where table_name = @_table`
     * db.print.update("dbo.users", {id: 1, name: "John", un_matched_column: "some value"})
     * prints: update dbo.users set id = @_id, name = @_name
    */
-    update: async (tableName: string, params: { [key: string]: any }) => {
-      const columns = await this.#get.matchingColumns(tableName, params);
-      const primaryKey = await this.#get.schema.primaryKey(tableName);
-
-      if (columns) {
-        const columnsStr = columns.map(column => `${column} = @_${column}`).join(',\n');
-        const qry = `update ${tableName} set \n${columnsStr}\n where ${primaryKey} = @_${primaryKey}`
-
-        console.info(qry);
-        return qry
-      }
+    update: async (tableName: string, params: QueryParameters) => {
+      const qry = await this.#get.update(tableName, params);
+      console.info(qry);
+      return qry
     },
     /**
     * Prints insert query to quickly match columns in table with object
@@ -516,14 +573,9 @@ where table_name = @_table`
     * prints: insert into dbo.users (id, name) select (@_id, @_name)
     */
     insert: async (tableName: string, params: { [key: string]: any }) => {
-      const columns = await this.#get.matchingColumns(tableName, params);
-
-      if (columns) {
-        const columnsStr = columns.map(column => `@_${column}`).join(',');
-        const qry = `insert into ${tableName} (${columns.join(",")})\nselect ${columnsStr}`
-        console.info(qry);
-        return qry
-      }
+      const qry = await this.#get.insert(tableName, params);
+      console.info(qry);
+      return qry
     }
   }
 
