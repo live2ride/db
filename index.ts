@@ -23,7 +23,7 @@ function isNumeric(value: string | number) {
 
 
 
-
+type UpdateResponseType = { rowsAffected: number }
 type QueryParameters = { [k: string]: any }
 
 type StorageType = {
@@ -194,13 +194,13 @@ export default class DB implements DbProps {
     }
   }
 
-  async update<T = any>(tableName: string, params: QueryParameters): Promise<T> {
+  async update(tableName: string, params: QueryParameters): Promise<UpdateResponseType> {
     const qry = await this.#get.update(tableName, params)
-    return this.#exec<T>(qry, params);
+    return this.#exec<UpdateResponseType>(qry + `\nselect @@ROWCOUNT as rowsAffected`, params, true);
   }
-  async insert<T = any>(tableName: string, params: QueryParameters): Promise<T> {
+  async insert(tableName: string, params: QueryParameters): Promise<UpdateResponseType> {
     const qry = await this.#get.insert(tableName, params)
-    return this.#exec<T>(qry, params);
+    return this.#exec<UpdateResponseType>(qry + `\nselect @@ROWCOUNT as rowsAffected`, params, true);
   }
 
   async where<T = any>(
@@ -348,7 +348,7 @@ export default class DB implements DbProps {
       const columnsStr = columns.map(column => `${column} = @_${column}`).join(',\n');
       let qry = `update ${tableName} set
       ${columnsStr}
-      where ${primaryKey} = @_${primaryKey}`
+      where ${primaryKey} = @_${primaryKey} `
 
       return qry
 

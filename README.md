@@ -42,10 +42,12 @@ const params = {
 Here's a short example demonstrating basic operations such as executing queries, inserting, and updating records.
 
 ```javascript
+const { rowsAffected } = await db.update("dbo.test", { num: 1, obj: { key: "value2" } });
+if (rowsAffected === 0) {
+  await db.insert("dbo.test", { num: 1, obj: { key: "value" } });
+}
 await db.exec('SELECT * FROM dbo.test WHERE num = @_num', { num: 1 });
 await db.exec('SELECT * FROM dbo.test WHERE num IN (@_nums)', { nums: [1, 2, 3] });
-await db.insert("dbo.test", { num: 1, obj: { key: "value" } });
-await db.update("dbo.test", { num: 1, obj: { key: "value2" } });
 ```
 
 ## Configuration
