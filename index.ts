@@ -8,10 +8,10 @@ import MSSQLError, { DBErrorProps } from "./classes/DBError";
 import { ConfigProps, DBParam, DbProps } from "./types";
 import { extractOpenJson } from "./utils/extract-openjson";
 import { inputBuilder } from "./utils/input"
-import { getOrderBy } from "src/modules/db/utils/move-orderby";
+import { getOrderBy } from "./utils/move-orderby";
 import debug from "debug";
 
-
+type PlainObject = { [key: string]: any };
 
 const isDefined = (value: any): boolean => Boolean(value);// const isDefined = (value: any): boolean => value !== undefined && value !== null;
 const sleep = async (ms: number): Promise<void> => {
@@ -193,14 +193,39 @@ export default class DB implements DbProps {
       // throw err;
     }
   }
+  /**
+   * Retrieves the server and database name for the current database connection.
+   *
+   * @returns A promise that resolves to an object containing the server name and database name.
+   */
 
+  async stats() {
+    const qry = 'SELECT   @@SERVERNAME AS ServerName,    DB_NAME() AS DatabaseName; '
+    return await this.#exec(qry, null, true)
+  }
+  /**
+   * Updates records in the specified table with the provided parameters.
+   *
+   * @param tableName - The name of the table where the records will be updated.
+   * @param params - An object containing the key-value pairs to be updated.
+   * @returns A promise that resolves to an object containing the number of affected rows ({rowsAffected}).
+   */
   async update(tableName: string, params: QueryParameters): Promise<UpdateResponseType> {
     const qry = await this.#get.update(tableName, params)
     return this.#exec<UpdateResponseType>(qry + `\nselect @@ROWCOUNT as rowsAffected`, params, true);
   }
-  async insert(tableName: string, params: QueryParameters): Promise<UpdateResponseType> {
+
+  /**
+   * Inserts a new record into the specified table with the provided parameters.
+   *
+   * @param tableName - The name of the table where the record will be inserted.
+   * @param params - An object containing the key-value pairs to be inserted as a new record.
+   * @returns A promise that resolves to an object containing the inserted record's primary key and its value.
+   */
+
+  async insert(tableName: string, params: QueryParameters): Promise<PlainObject> {
     const qry = await this.#get.insert(tableName, params)
-    return this.#exec<UpdateResponseType>(qry + `\nselect @@ROWCOUNT as rowsAffected`, params, true);
+    return this.#exec<PlainObject>(qry, params, true);
   }
 
   async where<T = any>(
@@ -330,9 +355,11 @@ export default class DB implements DbProps {
       if (!columns) {
         throw new Error("Invalid table columns");
       }
-
+      const primaryKey = await this.#get.schema.primaryKey(tableName);
       const columnsStr = columns.map(column => `@_${column}`).join(',');
-      const qry = `insert into ${tableName} (${columns.join(",")}) values (${columnsStr})`
+      let qry = `insert into ${tableName} (${columns.join(",")}) \n`
+      if (primaryKey) qry += `OUTPUT INSERTED.${primaryKey} \n`
+      qry += `values (${columnsStr})`
       return qry;
     },
     update: async (tableName: string, params: QueryParameters) => {
@@ -436,8 +463,7 @@ export default class DB implements DbProps {
 
     schema: {
       parts: (tableName: string) => {
-        const cleanTableName = tableName.replace("..", ".dbo.")
-        const parts = String(tableName).split(".")
+        const parts = String(tableName).replace("..", ".dbo.").split(".")
         const table = parts.pop()
         const schema = parts.pop()
         const catalog = parts.pop()
@@ -461,7 +487,22 @@ where tab.constraint_type = 'primary key'
 and tab.table_name = @_table`
         if (schema) qry += `\nand tab.table_schema = @_schema`
 
-        const { column_name, isIdentity } = await this.exec<any>(qry, { table, schema }, true) || {}
+        const res = await this.exec<any>(qry, { table, schema }, true) || {}
+
+        let column_name = res.column_name;
+        let isIdentity = res.isIdentity;
+
+        if (!column_name) {
+          qry = `SELECT column_name,1 as isIdentity
+                  FROM INFORMATION_SCHEMA.COLUMNS
+                  WHERE COLUMNPROPERTY(OBJECT_ID(TABLE_SCHEMA + '.' + TABLE_NAME), COLUMN_NAME, 'IsIdentity') = 1
+                  and table_name = @_table
+                  `
+          if (schema) qry += `\nand table_schema = @_schema`
+          let colRes = await this.#exec(qry, { table, schema }, true) || {}
+          column_name = colRes.column_name
+        }
+
 
         if (!STORAGE[tableName]) STORAGE[tableName] = {}
         STORAGE[tableName] = {
