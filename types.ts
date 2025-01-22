@@ -1,3 +1,4 @@
+export type PlainObject = { [key: string]: any };
 export type ConfigProps = {
   database: string;
   user: string;

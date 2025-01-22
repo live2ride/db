@@ -1,17 +1,20 @@
 import { Request, Response } from "express";
+import sql, { Request as MSSQLRequest } from "mssql";
+import debug from "debug";
+/** lodash */
 import find from "lodash/find";
 import forEach from "lodash/forEach";
-
 import map from "lodash/map";
-import sql, { Request as MSSQLRequest } from "mssql";
+
+/** lodash */
 import MSSQLError, { DBErrorProps } from "./classes/DBError";
-import { ConfigProps, DBParam, DbProps } from "./types";
+import { ConfigProps, PlainObject, DBParam, DbProps } from "./types";
 import { extractOpenJson } from "./utils/extract-openjson";
 import { inputBuilder } from "./utils/input"
 import { getOrderBy } from "./utils/move-orderby";
-import debug from "debug";
 
-type PlainObject = { [key: string]: any };
+
+
 
 const isDefined = (value: any): boolean => Boolean(value);// const isDefined = (value: any): boolean => value !== undefined && value !== null;
 const sleep = async (ms: number): Promise<void> => {
