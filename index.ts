@@ -372,10 +372,11 @@ export default class DB implements DbProps {
     update: async (tableName: string, params: QueryParameters) => {
 
       const primaryKey = await this.#get.schema.primaryKey(tableName);
+
       if (!primaryKey) throw new Error(`Table ${tableName} has no primary key`);
       const columns = await this.#get.matchingColumns(tableName, params, primaryKey);
 
-      if (!columns) {
+      if (!columns || columns.length === 0) {
         throw new Error(`Table ${tableName} has no matching columns`);
       }
 
@@ -477,7 +478,7 @@ export default class DB implements DbProps {
         return { table, schema, catalog }
       },
       primaryKey: async (tableName: string) => {
-        const primaryKey = STORAGE[tableName]?.primaryKey;
+        let primaryKey = STORAGE[tableName]?.primaryKey;
         if (primaryKey) return primaryKey;
 
 
@@ -496,29 +497,32 @@ and tab.table_name = @_table`
 
         const res = await this.exec<any>(qry, { table, schema }, true) || {}
 
-        let column_name = res.column_name;
+        primaryKey = res.column_name;
         let isIdentity = res.isIdentity;
 
-        if (!column_name) {
-          qry = `SELECT column_name,1 as isIdentity
-                  FROM INFORMATION_SCHEMA.COLUMNS
-                  WHERE COLUMNPROPERTY(OBJECT_ID(TABLE_SCHEMA + '.' + TABLE_NAME), COLUMN_NAME, 'IsIdentity') = 1
-                  and table_name = @_table
-                  `
-          if (schema) qry += `\nand table_schema = @_schema`
+        if (!primaryKey) {
+          qry = `SELECT c.name AS column_name,c.is_identity AS isIdentity
+                  FROM tools.sys.columns AS c
+                  JOIN tools.sys.tables   AS t ON c.object_id = t.object_id
+                  JOIN tools.sys.schemas  AS s ON t.schema_id  = s.schema_id
+                  WHERE t.name = @_table
+                  AND c.is_identity = 1`
+          if (schema) qry += `\n AND s.name = @_schema`
+          // this.print.params({ table, schema, catalog }, qry)
           let colRes = await this.#exec(qry, { table, schema }, true) || {}
-          column_name = colRes.column_name
+
+          primaryKey = colRes.column_name
         }
 
 
         if (!STORAGE[tableName]) STORAGE[tableName] = {}
         STORAGE[tableName] = {
           ...STORAGE[tableName],
-          primaryKey: column_name,
+          primaryKey: primaryKey,
           isIdentity
         }
 
-        return column_name;
+        return primaryKey;
       },
       columns: async (tableName: string): Promise<{ column_name: string }[]> => {
         const tableColumns = STORAGE[tableName]?.columns;
