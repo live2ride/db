@@ -52,8 +52,7 @@ export const inputBuilder = (req?: MSSQLRequest, _key?: string, value?: any) => 
                 type = "int";
             }
         } else if (_value instanceof Date) {
-            // must come before object since date is type of object
-            // _value = value.toISOString().replace("T", " ");
+
             sqlType = sql.DateTime;
             type = "DateTime";
         } else if (typeof _value === "object" || _value instanceof Set) {

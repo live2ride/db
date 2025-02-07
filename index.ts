@@ -227,6 +227,9 @@ export default class DB implements DbProps {
    */
 
   async insert(tableName: string, params: QueryParameters): Promise<PlainObject> {
+    /** providing an object with identity column null fails because its trying to insert identity value
+     * 
+     */
     const qry = await this.#get.insert(tableName, params)
     return this.#exec<PlainObject>(qry, params, true);
   }
@@ -355,7 +358,8 @@ export default class DB implements DbProps {
   #get = {
     insert: async (tableName: string, params: QueryParameters) => {
       const columns = await this.#get.matchingColumns(tableName, params, "");
-      if (!columns) {
+
+      if (!columns || !columns.length) {
         throw new Error("Invalid table columns");
       }
       const primaryKey = await this.#get.schema.primaryKey(tableName);
@@ -480,11 +484,11 @@ export default class DB implements DbProps {
         const { table, schema, catalog } = this.#get.schema.parts(tableName);
 
         let qry = ``
-        if (catalog) qry += `use ${catalog} \n`
+        if (catalog) qry += ` \n`
         qry += `select col.column_name as column_name,
         COLUMNPROPERTY(OBJECT_ID(col.TABLE_CATALOG +'.' +col.TABLE_SCHEMA +'.'+  col.TABLE_NAME), col.COLUMN_NAME, 'IsIdentity') AS isIdentity
-from information_schema.table_constraints tab 
-inner join information_schema.key_column_usage col 
+from ${catalog}.information_schema.table_constraints tab 
+inner join ${catalog}.information_schema.key_column_usage col 
     on tab.constraint_name = col.constraint_name
 where tab.constraint_type = 'primary key' 
 and tab.table_name = @_table`
@@ -523,11 +527,14 @@ and tab.table_name = @_table`
         const { table, schema, catalog } = this.#get.schema.parts(tableName);
 
         let qry = '';
-        if (catalog) qry += `use ${catalog} \n`;
-        qry += `select column_name from INFORMATION_SCHEMA.columns where table_name = @_table`;
+        if (catalog) qry += ` `;
+        qry += `select column_name from ${catalog}.INFORMATION_SCHEMA.columns where table_name = @_table`;
         if (schema) qry += `\nand table_schema = @_schema`;
 
         const res = await this.exec<{ column_name: string }[]>(qry, { table, schema });
+        if (!res.length) {
+          throw new Error(`Table ${tableName} has no columns`)
+        }
 
         if (!STORAGE[tableName]) STORAGE[tableName] = {}
         STORAGE[tableName].columns = res
@@ -541,6 +548,7 @@ and tab.table_name = @_table`
       }
 
       const columns = await this.#get.schema.columns(tableName);
+
       const matchedColumns = columns?.filter(({ column_name }) => column_name in parameters && column_name !== primaryKey);
       return matchedColumns?.map(({ column_name }) => column_name);
     },
@@ -587,9 +595,9 @@ and tab.table_name = @_table`
     params: (params: QueryParameters, qry?: string) => {
       const p = this.print.get.params(params);
 
-      console.info(p);
+      console.log(p);
 
-      if (qry) console.info(this.#get.query(qry, params));
+      if (qry) console.log(this.#get.query(qry, params));
     },
     /**
    * Prints update query to quickly match columns in table with object
@@ -603,7 +611,7 @@ and tab.table_name = @_table`
    */
     update: async (tableName: string, params: QueryParameters) => {
       const qry = await this.#get.update(tableName, params);
-      console.info(qry);
+      console.log(qry);
       return qry
     },
     /**
@@ -618,7 +626,7 @@ and tab.table_name = @_table`
     */
     insert: async (tableName: string, params: { [key: string]: any }) => {
       const qry = await this.#get.insert(tableName, params);
-      console.info(qry);
+      console.log(qry);
       return qry
     }
   }
