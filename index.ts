@@ -483,13 +483,14 @@ export default class DB implements DbProps {
 
 
         const { table, schema, catalog } = this.#get.schema.parts(tableName);
+        const catalogStr = catalog ? `${catalog}.` : '';
 
         let qry = ``
-        if (catalog) qry += ` \n`
+
         qry += `select col.column_name as column_name,
         COLUMNPROPERTY(OBJECT_ID(col.TABLE_CATALOG +'.' +col.TABLE_SCHEMA +'.'+  col.TABLE_NAME), col.COLUMN_NAME, 'IsIdentity') AS isIdentity
-from ${catalog}.information_schema.table_constraints tab 
-inner join ${catalog}.information_schema.key_column_usage col 
+from ${catalogStr}information_schema.table_constraints tab 
+inner join ${catalogStr}information_schema.key_column_usage col 
     on tab.constraint_name = col.constraint_name
 where tab.constraint_type = 'primary key' 
 and tab.table_name = @_table`
@@ -530,9 +531,8 @@ and tab.table_name = @_table`
 
         const { table, schema, catalog } = this.#get.schema.parts(tableName);
 
-        let qry = '';
-        if (catalog) qry += ` `;
-        qry += `select column_name from ${catalog}.INFORMATION_SCHEMA.columns where table_name = @_table`;
+        const catalogStr = catalog ? `${catalog}.` : '';
+        let qry = `select column_name from ${catalogStr}INFORMATION_SCHEMA.columns where table_name = @_table`;
         if (schema) qry += `\nand table_schema = @_schema`;
 
         const res = await this.exec<{ column_name: string }[]>(qry, { table, schema });
@@ -599,9 +599,9 @@ and tab.table_name = @_table`
     params: (params: QueryParameters, qry?: string) => {
       const p = this.print.get.params(params);
 
-      console.log(p);
+      console.info(p);
 
-      if (qry) console.log(this.#get.query(qry, params));
+      if (qry) console.info(this.#get.query(qry, params));
     },
     /**
    * Prints update query to quickly match columns in table with object
