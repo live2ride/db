@@ -30,16 +30,23 @@ type UpdateResponseType = { rowsAffected: number }
 type QueryParameters = { [k: string]: any }
 
 type StorageType = {
-  [key: string]: {
-    primaryKey?: string,
-    isIdentity?: boolean,
-    columns?: { column_name: string }[],
+  keys: {
+    [key: string]: {
+      primaryKey?: string,
+      isIdentity?: boolean,
+    }
+  },
+  columns: {
+    [key: string]: string[]
   }
 }
 /** save tables metadata so we dont have to fetch from db every time,
  * implement other storage solution like redis
  */
-let STORAGE: StorageType = {}
+let STORAGE: StorageType = {
+  keys: {},
+  columns: {},
+}
 
 export default class DB implements DbProps {
 
@@ -478,9 +485,10 @@ export default class DB implements DbProps {
         return { table, schema, catalog }
       },
       primaryKey: async (tableName: string) => {
-        let primaryKey = STORAGE[tableName]?.primaryKey;
-        if (primaryKey) return primaryKey;
 
+        let storage = STORAGE.keys[tableName]
+
+        if (storage) return storage?.primaryKey;
 
         const { table, schema, catalog } = this.#get.schema.parts(tableName);
         const catalogStr = catalog ? `${catalog}.` : '';
@@ -496,38 +504,56 @@ where tab.constraint_type = 'primary key'
 and tab.table_name = @_table`
         if (schema) qry += `\nand tab.table_schema = @_schema`
 
+
         const res = await this.exec<any>(qry, { table, schema }, true) || {}
 
-        primaryKey = res.column_name;
+        let primaryKey = res.column_name;
         let isIdentity = res.isIdentity;
 
         if (!primaryKey) {
-          qry = `SELECT c.name AS column_name,c.is_identity AS isIdentity
-                  FROM tools.sys.columns AS c
+          qry = `select col.column_name as column_name,
+                        COLUMNPROPERTY(OBJECT_ID(col.TABLE_CATALOG +'.' +col.TABLE_SCHEMA +'.'+  col.TABLE_NAME), col.COLUMN_NAME, 'IsIdentity') AS isIdentity
+                from information_schema.table_constraints tab
+                inner join information_schema.key_column_usage col
+                    on tab.constraint_name = col.constraint_name
+                where tab.constraint_type = 'primary key'
+                  and tab.table_name = @_table
+                  ${schema ? "and tab.table_schema = @_schema" : ""}
+                union all 
+                SELECT c.name AS column_name,c.is_identity AS isIdentity
+                FROM tools.sys.columns AS c
                   JOIN tools.sys.tables   AS t ON c.object_id = t.object_id
                   JOIN tools.sys.schemas  AS s ON t.schema_id  = s.schema_id
-                  WHERE t.name = @_table
-                  AND c.is_identity = 1`
-          if (schema) qry += `\n AND s.name = @_schema`
+                  ${schema ? "AND s.name = @_schema" : ""}
+                WHERE t.name = @_table
+                  AND c.is_identity = 1
+                union all 
+                SELECT c.name AS identity_column, null
+                FROM sys.identity_columns c
+                JOIN sys.tables t ON c.object_id = t.object_id
+                JOIN sys.schemas s ON t.schema_id = s.schema_id
+                WHERE t.name = @_table
+                ${schema ? "AND s.name = @_schema" : ""}`
+
           // this.print.params({ table, schema, catalog }, qry)
           let colRes = await this.#exec(qry, { table, schema }, true) || {}
 
           primaryKey = colRes.column_name
         }
 
-
-        if (!STORAGE[tableName]) STORAGE[tableName] = {}
-        STORAGE[tableName] = {
-          ...STORAGE[tableName],
-          primaryKey: primaryKey,
+        STORAGE.keys[tableName] = {
+          primaryKey,
           isIdentity
         }
 
+
         return primaryKey;
       },
-      columns: async (tableName: string): Promise<{ column_name: string }[]> => {
-        const tableColumns = STORAGE[tableName]?.columns;
+      columns: async (tableName: string): Promise<string[]> => {
+
+        const tableColumns = STORAGE.columns[tableName]
         if (tableColumns) return tableColumns;
+
 
         const { table, schema, catalog } = this.#get.schema.parts(tableName);
 
@@ -539,10 +565,10 @@ and tab.table_name = @_table`
         if (!res.length) {
           throw new Error(`Table ${tableName} has no columns`)
         }
+        const columns = res.map((r) => r.column_name)
 
-        if (!STORAGE[tableName]) STORAGE[tableName] = {}
-        STORAGE[tableName].columns = res
-        return res;
+        STORAGE.columns[tableName] = columns || []
+        return columns;
       },
     },
 
@@ -553,8 +579,8 @@ and tab.table_name = @_table`
 
       const columns = await this.#get.schema.columns(tableName);
 
-      const matchedColumns = columns?.filter(({ column_name }) => column_name in parameters && column_name !== primaryKey);
-      return matchedColumns?.map(({ column_name }) => column_name);
+      const matchedColumns = columns?.filter((column_name) => column_name in parameters && column_name !== primaryKey);
+      return matchedColumns
     },
   }
 
