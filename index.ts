@@ -30,6 +30,7 @@ type UpdateResponseType = { rowsAffected: number }
 type QueryParameters = { [k: string]: any }
 
 type StorageType = {
+
   keys: {
     [key: string]: {
       primaryKey?: string,
@@ -38,14 +39,19 @@ type StorageType = {
   },
   columns: {
     [key: string]: string[]
+  },
+  promises: {
+    [key: string]: Promise<any>
   }
 }
+
 /** save tables metadata so we dont have to fetch from db every time,
  * implement other storage solution like redis
  */
 let STORAGE: StorageType = {
   keys: {},
   columns: {},
+  promises: {}
 }
 
 export default class DB implements DbProps {
@@ -171,7 +177,7 @@ export default class DB implements DbProps {
       if (err.message.includes("deadlock") || err.message.includes("unknown reason")) {
         // retry
         if (retryCount < 5) {
-          await sleep(150)
+          await sleep(450)
           return this.#exec<T>(query, params, firstRecordOnly, retryCount + 1);
         }
       }
@@ -364,12 +370,15 @@ export default class DB implements DbProps {
 
   #get = {
     insert: async (tableName: string, params: QueryParameters) => {
-      const columns = await this.#get.matchingColumns(tableName, params, "");
+      const primaryKey = await this.#get.schema.primaryKey(tableName);
+
+      const columns = await this.#get.matchingColumns(tableName, params, primaryKey);
 
       if (!columns || !columns.length) {
-        throw new Error("Invalid table columns");
+        throw new Error(`Invalid table columns (${tableName})`);
       }
-      const primaryKey = await this.#get.schema.primaryKey(tableName);
+
+
       const columnsStr = columns.map(column => `@_${column}`).join(',');
       let qry = `insert into ${tableName} (${columns.join(",")}) \n`
       if (primaryKey) qry += `OUTPUT INSERTED.${primaryKey} \n`
@@ -550,24 +559,24 @@ and tab.table_name = @_table`
         return primaryKey;
       },
       columns: async (tableName: string): Promise<string[]> => {
-
-        const tableColumns = STORAGE.columns[tableName]
-        if (tableColumns) return tableColumns;
-
+        const storage = STORAGE.columns[tableName]
+        if (storage) {
+          return storage
+        }
 
         const { table, schema, catalog } = this.#get.schema.parts(tableName);
-
         const catalogStr = catalog ? `${catalog}.` : '';
         let qry = `select column_name from ${catalogStr}INFORMATION_SCHEMA.columns where table_name = @_table`;
         if (schema) qry += `\nand table_schema = @_schema`;
 
-        const res = await this.exec<{ column_name: string }[]>(qry, { table, schema });
+        const res = await this.exec(qry, { table, schema });
         if (!res.length) {
-          throw new Error(`Table ${tableName} has no columns`)
+          throw new Error(`Table ${tableName} has no columns`);
         }
-        const columns = res.map((r) => r.column_name)
 
-        STORAGE.columns[tableName] = columns || []
+        const columns = res.map((r) => r.column_name);
+        STORAGE.columns[tableName] = columns; // Cache the result.
+
         return columns;
       },
     },
@@ -578,8 +587,10 @@ and tab.table_name = @_table`
       }
 
       const columns = await this.#get.schema.columns(tableName);
+      if (!columns?.length) throw new Error(`No columns found for table ${tableName}`)
 
       const matchedColumns = columns?.filter((column_name) => column_name in parameters && column_name !== primaryKey);
+      if (!matchedColumns?.length) throw new Error(`No columns in table ${tableName} have been matched for with parameters ${JSON.stringify(parameters)}`)
       return matchedColumns
     },
   }
@@ -641,7 +652,7 @@ and tab.table_name = @_table`
    */
     update: async (tableName: string, params: QueryParameters) => {
       const qry = await this.#get.update(tableName, params);
-      console.log(qry);
+
       return qry
     },
     /**
@@ -656,7 +667,7 @@ and tab.table_name = @_table`
     */
     insert: async (tableName: string, params: { [key: string]: any }) => {
       const qry = await this.#get.insert(tableName, params);
-      console.log(qry);
+
       return qry
     }
   }
@@ -664,3 +675,44 @@ and tab.table_name = @_table`
 
 
 }
+
+
+
+/*
+
+columns: async (tableName: string): Promise<string[]> => {
+        if (STORAGE.columns[tableName]) {
+          return STORAGE.columns[tableName];
+        }
+        const promiseName = `columns-${tableName}`
+        if (STORAGE.promises[promiseName] as any) {
+          return await STORAGE.promises[promiseName];
+        }
+        const getColumns = async () => {
+          const { table, schema, catalog } = this.#get.schema.parts(tableName);
+          const catalogStr = catalog ? `${catalog}.` : '';
+          let qry = `select column_name from ${catalogStr}INFORMATION_SCHEMA.columns where table_name = @_table`;
+          if (schema) qry += `\nand table_schema = @_schema`;
+
+          const res = await this.exec(qry, { table, schema });
+          if (!res.length) {
+            throw new Error(`Table ${tableName} has no columns`);
+          }
+
+          const columns = res.map((r) => r.column_name);
+          STORAGE.columns[tableName] = columns; // Cache the result.
+          return columns;
+        }
+
+        STORAGE.promises[promiseName] = getColumns();
+        try {
+          return await STORAGE.promises[promiseName];
+        } finally {
+          // Remove the promise from the cache once it's resolved or rejected.
+          delete STORAGE.promises[promiseName];
+        }
+
+
+
+      },
+*/
