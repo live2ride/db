@@ -9,6 +9,7 @@ export type ConfigProps = {
   log?: Function;
   responseHeaders?: string[];
   tranHeader?: string;
+  useOpenJson?: boolean;
   pool?: any;
   config?: ConfigProps;
   errors?: {
