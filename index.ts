@@ -551,7 +551,6 @@ and tab.table_name = @_table`
                 WHERE t.name = @_table
                 ${schema ? "AND s.name = @_schema" : ""}`
 
-          this.print.params({ table, schema, catalog }, qry)
           let colRes = (await this.#exec(qry, { table, schema }, true)) || {}
 
           primaryKey = colRes.column_name
