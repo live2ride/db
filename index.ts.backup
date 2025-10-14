@@ -19,7 +19,7 @@ import {
 
 /** lodash */
 import type { DBErrorProps } from "./classes/DBError"
-import type { DBParam, DbProps, ConfigProps } from "./types"
+import type { DBParam, DbProps, ConfigProps, PlainObject } from "./types"
 
 const isDefined = (value: any): boolean => Boolean(value) // const isDefined = (value: any): boolean => value !== undefined && value !== null;
 const sleep = async (ms: number): Promise<void> => {
@@ -27,20 +27,6 @@ const sleep = async (ms: number): Promise<void> => {
 }
 function isNumeric(value: string | number) {
   return /^-?\d+$/.test(String(value))
-}
-type ExecResultMode = "first" | "rows" | "sets" | "meta"
-
-type ExecOptions = {
-  /** How to shape the return. Default: 'rows' */
-  result?: ExecResultMode
-  /** Toggle your JSON/number coercion. Default: true */
-  parse?: boolean
-  /** Force SET ROWCOUNT 1;...;SET ROWCOUNT 0; wrapping (rarely needed) */
-  rowcountOne?: boolean
-  /** Control auto pagination appender for single-SELECT queries */
-  applyPaging?: "auto" | "never"
-
-  limit?: number
 }
 
 type UpdateResponseType = { rowsAffected: number }
@@ -149,15 +135,14 @@ export default class DB implements DbProps {
   async exec<T = any>(
     query: string,
     params?: QueryParameters | null,
-    optionsOrBoolean?: ExecOptions | boolean
+    firstRecordOnly = false
   ): Promise<T> {
-    return this.#exec<T>(query, params, optionsOrBoolean)
+    return this.#exec(query, params, firstRecordOnly)
   }
-
   async #exec<T = any>(
     query: string,
     params?: QueryParameters | null,
-    optionsOrBoolean?: ExecOptions | boolean,
+    firstRecordOnly = false,
     retryCount = 0
   ): Promise<T> {
     if (!this.pool) {
@@ -165,65 +150,41 @@ export default class DB implements DbProps {
       this.pool = await conPool.connect()
     }
 
-    // Normalize options (preserve old boolean behavior)
-    const opts: Required<ExecOptions> = this.#normalizeExecOptions(optionsOrBoolean)
-
     let req: MSSQLRequest = this.pool.request()
     if (params?.limit && !params.page) params.page = 0
+
     req = this.#get.params(req, params)
 
-    // Build query (suppress auto paging if returning multiple sets)
-    query = this.#get.query(query, params, opts.result === "sets" || opts.applyPaging === "never")
+    /** replace  and id in (@_id) with  and id in (select value from openjson(@_id)) */
+    query = this.#get.query(query, params)
 
-    // Build header + safe ROWCOUNT wrapping
-    let header = this.tranHeader
-    const applyRowcount = opts.rowcountOne || opts.result === "first" || optionsOrBoolean === true
-
-    if (applyRowcount) header += `\nSET ROWCOUNT 1;`
-
-    const sqlText = `${header}\n${query}\n${applyRowcount ? "SET ROWCOUNT 0;" : ""}`
+    /**
+     * we are creating stack trace here so we can see where the query originated from
+     * if we use the actual error in catch block, it creates stack trace to MSSQL
+     * and most likely error is in the query
+     */
 
     try {
-      const result = await req.query(sqlText)
+      let header = this.tranHeader
 
-      if (opts.result === "meta") {
-        if (!opts.parse) return result as unknown as T
-        // clone the recordsets with parsing applied
-        const parsedSets = this.#parseRecordsets(result.recordsets)
-        return {
-          ...result,
-          recordsets: parsedSets,
-          recordset: parsedSets?.[0] ?? [],
-        } as unknown as T
-      }
-
-      if (opts.result === "sets") {
-        const sets = opts.parse ? this.#parseRecordsets(result.recordsets) : result.recordsets
-        return sets as unknown as T
-      }
-
-      // Default to first recordset
-      const rows = result.recordsets?.[0] ?? []
-      const parsedRows = opts.parse ? this.#parseRows(rows) : rows
-
-      // Handle result modes
-      if (opts.result === "first" || opts.limit === 1) {
-        return (parsedRows?.[0] as T) ?? (undefined as unknown as T)
-      }
-
-      // 'rows'
-      return parsedRows as unknown as T
+      if (firstRecordOnly) header += `\nset rowcount 1`
+      const result = await req.query(`${header} \n ${query}`)
+      return this.#get.parsedJson<T>(result.recordset, firstRecordOnly) as T
     } catch (err: any) {
       if (err.message.includes("deadlock") || err.message.includes("unknown reason")) {
+        // retry
         if (retryCount < 5) {
           await sleep(450)
-          return this.#exec<T>(query, params, optionsOrBoolean, retryCount + 1)
+          return this.#exec<T>(query, params, firstRecordOnly, retryCount + 1)
         }
       }
-
       const execError = new Error(err.message)
+      /** setting query error message */
+      execError.message = err.message
+
       const info: any = {
         name: "DBError",
+        // code: err.number === 2627 ? "primary-key-violation" : "unknown",
         number: err.number,
         state: err.state,
         class: err.class,
@@ -233,14 +194,15 @@ export default class DB implements DbProps {
         message: err.message || "invalid err.message",
         qry: query,
         params,
+
         stack: execError.stack,
       }
 
       this.#consoleLogError(info)
+
       throw new MSSQLError(info)
     }
   }
-
   /**
    * Retrieves the server and database name for the current database connection.
    *
@@ -272,12 +234,12 @@ export default class DB implements DbProps {
    * @returns A promise that resolves to an object containing the inserted record's primary key and its value.
    */
 
-  async insert<T = any>(tableName: string, params: QueryParameters): Promise<T> {
+  async insert(tableName: string, params: QueryParameters): Promise<PlainObject> {
     /** providing an object with identity column null fails because its trying to insert identity value
      *
      */
     const qry = await this.#get.insert(tableName, params)
-    return this.#exec<T>(qry, params, true)
+    return this.#exec<PlainObject>(qry, params, true)
   }
 
   async where<T = any>(
@@ -437,18 +399,27 @@ export default class DB implements DbProps {
 
       return qry
     },
-    query: (query: string, params: any, suppressPaging?: boolean) => {
+    query: (query: string, params: any) => {
       if (this.config.useOpenJson) {
         const pars = this.#get.keys(params)
 
+        /** select * from table where ids in (@_jsonObject ex: ([1,2,3,4,5]) ) */
         const inOpenJsonArrays = extractOpenJson(query)
+
         forEach(inOpenJsonArrays, (key) => {
           const o = find(pars, { key })
+
           if (o && Array.isArray(o.value)) {
             query = query.replace(`@_${key}`, `select value from openjson(@_${key})`)
+
+            // query = query.replace(`@_${key})`, `@_${key}) ${generateOpenJsonQueryWithClause(o.value, key)}`)
           }
         })
-
+        /**
+         * select * from openjson(@_jsonObject) where ids in (@_jsonObject ex: [{id: 1, someValue: 3}] )
+         * original select [{value: {id:1, someValue:3})]
+         * this select [{id: 1, someValue: 3}]
+         */
         const openJsonObjects = extractOpenJsonObjects(query)
         forEach(openJsonObjects, (key) => {
           const o = find(pars, { key })
@@ -463,7 +434,6 @@ export default class DB implements DbProps {
       }
 
       if (
-        !suppressPaging &&
         typeof params?.limit === "number" &&
         !isNaN(Number(params?.limit)) &&
         !["fetch next"].some((s) => query.toLowerCase().includes(s))
@@ -473,7 +443,6 @@ export default class DB implements DbProps {
 
       return query
     },
-
     params: (req: MSSQLRequest, params?: QueryParameters | null): MSSQLRequest => {
       if (params) {
         const pars = this.#get.keys(params)
@@ -494,6 +463,40 @@ export default class DB implements DbProps {
     },
 
     input: inputBuilder,
+    parsedJson: <T = any,>(data: T, firstRecordOnly: boolean): T | undefined => {
+      if (data && data[0]) {
+        forEach(data, (o: any) => {
+          // parse all the objects
+          Object.keys(o).forEach((key) => {
+            const str = o[key]
+
+            if (str === null) {
+              o[key] = undefined
+            } else if (typeof str === "string") {
+              if (isNumeric(str)) {
+                o[key] = Number(str)
+              } else {
+                try {
+                  const nv = JSON.parse(o[key])
+                  o = Object.assign(o, { [key]: nv })
+                } catch {
+                  /** */
+                }
+              }
+            }
+          })
+        })
+
+        if (firstRecordOnly) {
+          return data[0]
+        }
+        return data
+      }
+      if (firstRecordOnly) {
+        return undefined
+      }
+      return data
+    },
 
     schema: {
       parts: (tableName: string) => {
@@ -704,57 +707,5 @@ and tab.table_name = @_table`
 
       return qry
     },
-  }
-
-  #normalizeExecOptions(optionsOrBoolean?: ExecOptions | boolean): Required<ExecOptions> {
-    // old boolean → 'first'
-    const base: ExecOptions =
-      typeof optionsOrBoolean === "boolean"
-        ? { result: optionsOrBoolean ? "first" : "rows" }
-        : optionsOrBoolean || {}
-
-    return {
-      result: base.result ?? "rows",
-      parse: base.parse !== false,
-      rowcountOne: base.rowcountOne === true,
-      applyPaging: base.applyPaging ?? "auto",
-      limit: base.limit ?? 0, // 0 = no limit
-    }
-  }
-
-  /** Coerce one row (null→undefined, ints, JSON) */
-  #coerceRow(o: any) {
-    if (!o) return o
-    Object.keys(o).forEach((key) => {
-      const str = o[key]
-      if (str === null) {
-        o[key] = undefined
-      } else if (typeof str === "string") {
-        if (/^-?\d+$/.test(str)) {
-          o[key] = Number(str)
-        } else {
-          try {
-            const nv = JSON.parse(str)
-            o[key] = nv
-          } catch {
-            /** */
-          }
-        }
-      }
-    })
-    return o
-  }
-
-  #parseRows(rows: any[]) {
-    if (!Array.isArray(rows)) return []
-    for (let i = 0; i < rows.length; i++) {
-      rows[i] = this.#coerceRow(rows[i])
-    }
-    return rows
-  }
-
-  #parseRecordsets(recordsets: any[][]) {
-    if (!Array.isArray(recordsets)) return []
-    return recordsets.map((set) => this.#parseRows([...set]))
   }
 }

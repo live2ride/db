@@ -5,7 +5,7 @@ export function extractOpenJson(input: string): string[] {
     const matches: string[] = [];
     let match: RegExpExecArray | null;
 
-    // eslint-disable-next-line no-cond-assign
+     
     while ((match = regex.exec(input)) !== null) {
         matches.push(match[1].replace("@_", "").trim());
     }

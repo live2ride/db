@@ -1,5 +1,8 @@
-import sql, { Request as MSSQLRequest } from "mssql";
+import type { Request as MSSQLRequest } from "mssql";
+
+import sql from "mssql";
 import isNumber from "lodash-es/isNumber";
+
 function isFloat(n: any) {
     return !Number.isNaN(n) && n.toString().indexOf(".") !== -1;
 }
