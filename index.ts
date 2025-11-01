@@ -453,10 +453,10 @@ export default class DB implements DbProps {
         forEach(openJsonObjects, (key) => {
           const o = find(pars, { key })
           const v = o?.value?.[0]
-          if (v && typeof v === "object") {
+          if (v && typeof v === "object" && Array.isArray(o?.value)) {
             query = query.replace(
               `@_${key})`,
-              `@_${key}) ${generateOpenJsonQueryWithClause(o?.value, key)}`
+              `@_${key}) ${generateOpenJsonQueryWithClause(o.value, key)}`
             )
           }
         })
