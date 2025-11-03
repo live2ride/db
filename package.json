@@ -1,6 +1,6 @@
 {
     "name": "@live2ride/db",
-    "version": "1.5.4",
+    "version": "1.5.5",
     "description": "Simplify MSSQL operations",
     "main": "dist/index.js",
     "types": "dist/index.d.ts",
@@ -34,6 +34,7 @@
     },
     "devDependencies": {
         "@types/express": "^5.0.5",
+        "@types/fs-extra": "^11.0.4",
         "@types/lodash-es": "^4.17.12",
         "@types/node": "^24.9.2",
         "typescript": "^5.9.3"
