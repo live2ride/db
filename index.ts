@@ -8,9 +8,9 @@ import map from "lodash-es/map"
 import find from "lodash-es/find"
 import forEach from "lodash-es/forEach"
 
-import MSSQLError from "./classes/DBError"
 import { inputBuilder } from "./utils/input"
 import { getOrderBy } from "./utils/move-orderby"
+import { parseMSSQLError } from "./utils/parse-error"
 import {
   extractOpenJson,
   extractOpenJsonObjects,
@@ -19,7 +19,14 @@ import {
 
 /** lodash */
 import type { DBErrorProps } from "./classes/DBError"
-import type { DBParam, DbProps, ConfigProps } from "./types"
+import type {
+  DBParam,
+  DbProps,
+  ConfigProps,
+  ExecOptions,
+  QueryParameters,
+  UpdateResponseType,
+} from "./types"
 
 const isDefined = (value: any): boolean => Boolean(value) // const isDefined = (value: any): boolean => value !== undefined && value !== null;
 const sleep = async (ms: number): Promise<void> => {
@@ -28,23 +35,6 @@ const sleep = async (ms: number): Promise<void> => {
 function isNumeric(value: string | number) {
   return /^-?\d+$/.test(String(value))
 }
-type ExecResultMode = "first" | "rows" | "sets" | "meta"
-
-type ExecOptions = {
-  /** How to shape the return. Default: 'rows' */
-  result?: ExecResultMode
-  /** Toggle your JSON/number coercion. Default: true */
-  parse?: boolean
-  /** Force SET ROWCOUNT 1;...;SET ROWCOUNT 0; wrapping (rarely needed) */
-  rowcountOne?: boolean
-  /** Control auto pagination appender for single-SELECT queries */
-  applyPaging?: "auto" | "never"
-
-  limit?: number
-}
-
-type UpdateResponseType = { rowsAffected: number }
-type QueryParameters = { [k: string]: any }
 
 type StorageType = {
   keys: {
@@ -155,7 +145,7 @@ export default class DB implements DbProps {
   }
 
   async #exec<T = any>(
-    query: string,
+    originalQuery: string,
     params?: QueryParameters | null,
     optionsOrBoolean?: ExecOptions | boolean,
     retryCount = 0
@@ -173,7 +163,11 @@ export default class DB implements DbProps {
     req = this.#get.params(req, params)
 
     // Build query (suppress auto paging if returning multiple sets)
-    query = this.#get.query(query, params, opts.result === "sets" || opts.applyPaging === "never")
+    const query = this.#get.query(
+      originalQuery,
+      params,
+      opts.result === "sets" || opts.applyPaging === "never"
+    )
 
     // Build header + safe ROWCOUNT wrapping
     let header = this.tranHeader
@@ -221,23 +215,28 @@ export default class DB implements DbProps {
         }
       }
 
-      const execError = new Error(err.message)
-      const info: any = {
-        name: "DBError",
-        number: err.number,
-        state: err.state,
-        class: err.class,
-        lineNumber: err.lineNumber,
-        serverName: err?.serverName,
-        database: this.config.database,
-        message: err.message || "invalid err.message",
-        qry: query,
-        params,
-        stack: execError.stack,
+      const hadFetchNext = (_sqlText: string): boolean => {
+        return /\bFETCH\s+NEXT\b/i.test(_sqlText)
       }
 
-      this.#consoleLogError(info)
-      throw new MSSQLError(info)
+      const isNextUsageError = (_err: any): boolean => {
+        const msg = String(err?.message || "")
+        return err?.number === 153 || msg.includes("usage of the option NEXT")
+      }
+      // If our module injected FETCH NEXT (or server threw 153), run the lightest original query once.
+      const hadPaging = hadFetchNext(query)
+      if ((hadPaging || isNextUsageError(err)) && retryCount < 1) {
+        await this.#exec<T>(
+          originalQuery,
+          params,
+          { ...opts, applyPaging: "never", rowcountOne: true }, // no OFFSET/FETCH, just ROWCOUNT 1
+          retryCount + 1
+        )
+      }
+
+      const error = parseMSSQLError(err, { query, params: params || {}, config: this.config })
+      this.#consoleLogError(error as DBErrorProps)
+      throw error
     }
   }
 
@@ -336,6 +335,7 @@ export default class DB implements DbProps {
     //   // console.info("consoleLogError includes return", );
     //   return;
     // }
+
     if (debug.enabled("db")) {
       console.info("\x1b[31m", `****************** MSSQL ERROR start ******************`)
 
