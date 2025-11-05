@@ -250,6 +250,25 @@ export default class DB implements DbProps {
     const qry = "SELECT   @@SERVERNAME AS ServerName,    DB_NAME() AS DatabaseName; "
     return await this.#exec(qry, null, true)
   }
+
+  /**
+   * Public getter methods for retrieving database schema information
+   */
+  get = {
+    /**
+     * Retrieves identity columns for a given table.
+     *
+     * @param tableName - The name of the table to retrieve identity columns for.
+     * @returns A promise that resolves to an array of objects containing column name and identity properties.
+     * @example
+     * const identityCols = await db.get.identityColumns("dbo.users")
+     * // Returns: [{ column_name: "id", is_identity: 1, seed_value: 1, increment_value: 1 }]
+     */
+    identityColumns: async (tableName: string) => {
+      return this.#get.schema.identityColumns(tableName)
+    },
+  }
+
   /**
    * Updates records in the specified table with the provided parameters.
    *
@@ -625,8 +644,8 @@ and tab.table_name = @_table`
 
         const { table, schema, catalog } = this.#get.schema.parts(tableName)
         const catalogStr = catalog ? `${catalog}.` : ""
-        let qry = `select column_name 
-        from ${catalogStr}INFORMATION_SCHEMA.columns 
+        let qry = `select column_name
+        from ${catalogStr}INFORMATION_SCHEMA.columns
         where table_name = @_table`
         if (schema) qry += `\nand table_schema = @_schema`
 
@@ -640,6 +659,45 @@ and tab.table_name = @_table`
         STORAGE.columns[tableName] = columns // Cache the result.
 
         return columns
+      },
+      /**
+       * Retrieves identity columns for a given table.
+       *
+       * @param tableName - The name of the table to retrieve identity columns for.
+       * @returns A promise that resolves to an array of objects containing column name and identity properties.
+       * @example
+       * const identityCols = await db.getIdentityColumns("dbo.users")
+       * // Returns: [{ column_name: "id", is_identity: 1, seed_value: 1, increment_value: 1 }]
+       */
+      identityColumns: async (
+        tableName: string
+      ): Promise<
+        Array<{
+          column_name: string
+          is_identity: number
+          seed_value: number
+          increment_value: number
+        }>
+      > => {
+        const { table, schema, catalog } = this.#get.schema.parts(tableName)
+        const catalogStr = catalog ? `${catalog}.` : ""
+
+        const qry = `
+          SELECT
+            c.name AS column_name,
+            c.is_identity,
+            CAST(ic.seed_value AS bigint) AS seed_value,
+            CAST(ic.increment_value AS bigint) AS increment_value
+          FROM ${catalogStr}sys.columns AS c
+          JOIN ${catalogStr}sys.tables AS t ON c.object_id = t.object_id
+          JOIN ${catalogStr}sys.schemas AS s ON t.schema_id = s.schema_id
+          LEFT JOIN ${catalogStr}sys.identity_columns AS ic ON c.object_id = ic.object_id AND c.column_id = ic.column_id
+          WHERE t.name = @_table
+            ${schema ? "AND s.name = @_schema" : ""}
+            AND c.is_identity = 1`
+
+        const res = await this.exec(qry, { table, schema })
+        return res
       },
     },
 
