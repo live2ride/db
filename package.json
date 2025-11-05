@@ -4,6 +4,8 @@
     "description": "Simplify MSSQL operations",
     "main": "dist/index.js",
     "types": "dist/index.d.ts",
+      "author": "live2ride",
+    "license": "ISC",
     "scripts": {
         "build": "tsc",
         "prepublishOnly": "npm run build",
@@ -21,8 +23,6 @@
         "mssql",
         "sql"
     ],
-    "author": "live2ride",
-    "license": "ISC",
     "bugs": {
         "url": "https://github.com/live2ride/db/issues"
     },
