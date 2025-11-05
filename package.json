@@ -1,6 +1,6 @@
 {
     "name": "@live2ride/db",
-    "version": "1.5.5",
+    "version": "1.5.6",
     "description": "Simplify MSSQL operations",
     "main": "dist/index.js",
     "types": "dist/index.d.ts",
