@@ -275,13 +275,7 @@ export default class DB implements DbProps {
     const qry = await this.#get.delete(tableName, params)
 
     // TODO: Uncomment this line after testing
-    // return this.#exec<UpdateResponseType>(qry + `\nselect @@ROWCOUNT as rowsAffected`, params, true)
-
-    // For testing - log the query and params
-    console.log('DELETE Query:', qry + `\nselect @@ROWCOUNT as rowsAffected`)
-    console.log('Params:', params)
-    this.print.params(params, qry)
-    return { rowsAffected: 0 } as UpdateResponseType
+    return this.#exec<UpdateResponseType>(qry + `\nselect @@ROWCOUNT as rowsAffected`, params, true)
   }
 
   /**
