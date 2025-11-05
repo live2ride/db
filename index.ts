@@ -264,6 +264,27 @@ export default class DB implements DbProps {
   }
 
   /**
+   * Deletes records from the specified table with the provided parameters.
+   * All params provided are used as filter conditions in the WHERE clause.
+   *
+   * @param tableName - The name of the table where the records will be deleted.
+   * @param params - An object containing the key-value pairs to be used as filter conditions.
+   * @returns A promise that resolves to an object containing the number of affected rows ({rowsAffected}).
+   */
+  async delete(tableName: string, params: QueryParameters): Promise<UpdateResponseType> {
+    const qry = await this.#get.delete(tableName, params)
+
+    // TODO: Uncomment this line after testing
+    // return this.#exec<UpdateResponseType>(qry + `\nselect @@ROWCOUNT as rowsAffected`, params, true)
+
+    // For testing - log the query and params
+    console.log('DELETE Query:', qry + `\nselect @@ROWCOUNT as rowsAffected`)
+    console.log('Params:', params)
+    this.print.params(params, qry)
+    return { rowsAffected: 0 } as UpdateResponseType
+  }
+
+  /**
    * Inserts a new record into the specified table with the provided parameters.
    *
    * @param tableName - The name of the table where the record will be inserted.
@@ -434,6 +455,33 @@ export default class DB implements DbProps {
       const qry = `update ${tableName} set
       ${columnsStr}
       where ${primaryKey} = @_${primaryKey} `
+
+      return qry
+    },
+    delete: async (tableName: string, params: QueryParameters) => {
+      // Verify table has columns
+      const columns = await this.#get.schema.columns(tableName)
+      if (!columns?.length) throw new Error(`No columns found for table ${tableName}`)
+
+      // All params must be in the filter (all params are filter conditions)
+      const whereClauses: string[] = []
+      for (const [field, value] of Object.entries(params)) {
+        if (isDefined(value)) {
+          // Verify the field exists in the table
+          if (!columns.includes(field)) {
+            throw new Error(`Column '${field}' does not exist in table ${tableName}`)
+          }
+          whereClauses.push(`${field} = @_${field}`)
+        }
+      }
+
+      if (whereClauses.length === 0) {
+        throw new Error(`No valid filter conditions provided for delete operation`)
+      }
+
+      const whereClause = whereClauses.join(" AND ")
+      const qry = `delete from ${tableName}
+      where ${whereClause}`
 
       return qry
     },
@@ -705,6 +753,21 @@ and tab.table_name = @_table`
      */
     insert: async (tableName: string, params: { [key: string]: any }) => {
       const qry = await this.#get.insert(tableName, params)
+
+      return qry
+    },
+    /**
+     * Prints delete query to quickly match columns in table with object
+     *
+     * @tableName {String} Table to look up columns
+     * @param {Object} params Object to match with columns (used as filter conditions)
+     *
+     * @example
+     * db.print.delete("dbo.users", {id: 1, status: "inactive"})
+     * prints: delete from dbo.users where id = @_id AND status = @_status
+     */
+    delete: async (tableName: string, params: QueryParameters) => {
+      const qry = await this.#get.delete(tableName, params)
 
       return qry
     },
