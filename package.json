@@ -4,9 +4,10 @@
     "description": "Simplify MSSQL operations",
     "main": "dist/index.js",
     "types": "dist/index.d.ts",
-      "author": "live2ride",
+    "author": "live2ride",
     "license": "ISC",
     "scripts": {
+        "release:patch": "npm version patch -m \"chore(release): %s\" && git push --follow-tags && npm publish",
         "build": "tsc",
         "prepublishOnly": "npm run build",
         "test": ""
