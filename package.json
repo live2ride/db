@@ -36,7 +36,7 @@
         "@types/express": "^5.0.5",
         "@types/fs-extra": "^11.0.4",
         "@types/lodash-es": "^4.17.12",
-        "@types/node": "^24.9.2",
+        "@types/node": "^24.10.0",
         "typescript": "^5.9.3"
     },
     "directories": {

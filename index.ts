@@ -468,7 +468,9 @@ export default class DB implements DbProps {
         !isNaN(Number(params?.limit)) &&
         !["fetch next"].some((s) => query.toLowerCase().includes(s)) &&
         // Avoid mixing TOP with OFFSET/FETCH which SQL Server forbids
-        !/\btop\b/i.test(query)
+        !/\btop\b/i.test(query) &&
+        // fetch next requires order by
+        ["order by"].some((s) => query.toLowerCase().includes(s))
       ) {
         query += `\nOFFSET @_page * @_limit ROWS FETCH NEXT @_limit ROWS ONLY;`
       }
