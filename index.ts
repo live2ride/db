@@ -256,16 +256,17 @@ export default class DB implements DbProps {
    */
   get = {
     /**
-     * Retrieves identity columns for a given table.
+     * Retrieves the identity column name for a given table.
      *
-     * @param tableName - The name of the table to retrieve identity columns for.
-     * @returns A promise that resolves to an array of objects containing column name and identity properties.
+     * @param tableName - The name of the table to retrieve the identity column for.
+     * @returns A promise that resolves to the identity column name as a string, or undefined if no identity column exists.
      * @example
-     * const identityCols = await db.get.identityColumns("dbo.users")
-     * // Returns: [{ column_name: "id", is_identity: 1, seed_value: 1, increment_value: 1 }]
+     * const identityCol = await db.get.identityColumn("dbo.users")
+     * // Returns: "id"
      */
-    identityColumns: async (tableName: string) => {
-      return this.#get.schema.identityColumns(tableName)
+    identityColumn: async (tableName: string): Promise<string | undefined> => {
+      const cols = await this.#get.schema.identityColumns(tableName)
+      return cols?.[0]?.column_name
     },
   }
 
