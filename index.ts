@@ -247,7 +247,7 @@ export default class DB implements DbProps {
       if (err.message.includes("deadlock") || err.message.includes("unknown reason")) {
         if (retryCount < 5) {
           await sleep(450)
-          return this.#exec<T>(originalQuery, params, optionsOrBoolean, retryCount + 1)
+          return this.#exec<T>(query, params, optionsOrBoolean, retryCount + 1)
         }
       }
 
