@@ -11,11 +11,13 @@ import forEach from "lodash-es/forEach"
 import { inputBuilder } from "./utils/input"
 import { getOrderBy } from "./utils/move-orderby"
 import { parseMSSQLError } from "./utils/parse-error"
+import { validateTableName } from "./utils/validate-table-name"
 import {
   extractOpenJson,
   extractOpenJsonObjects,
   generateOpenJsonQueryWithClause,
 } from "./utils/extract-openjson"
+import { DEFAULT_DEADLOCK_RETRIES, DEADLOCK_RETRY_DELAY_MS, DEFAULT_POOL_CONFIG } from "./constants"
 
 /** lodash */
 import type { DBErrorProps } from "./classes/DBError"
@@ -31,9 +33,6 @@ import type {
 const isDefined = (value: any): boolean => Boolean(value) // const isDefined = (value: any): boolean => value !== undefined && value !== null;
 const sleep = async (ms: number): Promise<void> => {
   return new Promise((resolve) => setTimeout(resolve, ms))
-}
-function isNumeric(value: string | number) {
-  return /^-?\d+$/.test(String(value))
 }
 
 type StorageType = {
@@ -91,17 +90,48 @@ export default class DB implements DbProps {
         encrypt: false, // for azure
         trustServerCertificate: false, // change to true for local dev / self-signed certs
       },
-      pool: {
-        max: 100,
-        min: 0,
-        idleTimeoutMillis: 30000,
-      },
+      pool: DEFAULT_POOL_CONFIG,
       ...rest,
     }
+
+    // Validate required connection parameters
+    this.#validateConnectionConfig()
 
     this.responseHeaders = responseHeaders || []
     this.tranHeader = tranHeader || `SET TRANSACTION ISOLATION LEVEL READ UNCOMMITTED` //  \nset nocount on; \n`;
     this.pool = null
+  }
+
+  /**
+   * Validates that required connection parameters are present
+   * @throws Error if required parameters are missing
+   */
+  #validateConnectionConfig(): void {
+    const required = ['database', 'user', 'password', 'server'] as const
+    const missing: string[] = []
+
+    for (const field of required) {
+      if (!this.config[field] || this.config[field].trim() === '') {
+        missing.push(field)
+      }
+    }
+
+    if (missing.length > 0) {
+      throw new Error(
+        `Missing required database connection parameters: ${missing.join(', ')}. ` +
+        `Please provide them in the constructor or set environment variables: ` +
+        missing.map(f => `DB_${f.toUpperCase()}`).join(', ')
+      )
+    }
+
+    // Security warning for trustServerCertificate
+    if (this.config.options?.trustServerCertificate === true) {
+      console.warn(
+        'WARNING: trustServerCertificate is set to true. ' +
+        'This disables certificate validation and may expose you to man-in-the-middle attacks. ' +
+        'Only use this setting in development environments with self-signed certificates.'
+      )
+    }
   }
 
   #reply(req: Request, res: Response, data: any) {
@@ -158,14 +188,19 @@ export default class DB implements DbProps {
     // Normalize options (preserve old boolean behavior)
     const opts: Required<ExecOptions> = this.#normalizeExecOptions(optionsOrBoolean)
 
+    // Create a copy of params if we need to add default page value to avoid mutation
+    let effectiveParams = params
+    if (params?.limit && !params.page) {
+      effectiveParams = { ...params, page: 0 }
+    }
+
     let req: MSSQLRequest = this.pool.request()
-    if (params?.limit && !params.page) params.page = 0
-    req = this.#get.params(req, params)
+    req = this.#get.params(req, effectiveParams)
 
     // Build query (suppress auto paging if returning multiple sets)
     const query = this.#get.query(
       originalQuery,
-      params,
+      effectiveParams,
       opts.result === "sets" || opts.applyPaging === "never"
     )
 
@@ -209,8 +244,8 @@ export default class DB implements DbProps {
       return parsedRows as unknown as T
     } catch (err: any) {
       if (err.message.includes("deadlock") || err.message.includes("unknown reason")) {
-        if (retryCount < 5) {
-          await sleep(450)
+        if (retryCount < DEFAULT_DEADLOCK_RETRIES) {
+          await sleep(DEADLOCK_RETRY_DELAY_MS)
           return this.#exec<T>(query, params, optionsOrBoolean, retryCount + 1)
         }
       }
@@ -278,6 +313,7 @@ export default class DB implements DbProps {
    * @returns A promise that resolves to an object containing the number of affected rows ({rowsAffected}).
    */
   async update(tableName: string, params: QueryParameters): Promise<UpdateResponseType> {
+    validateTableName(tableName)
     const qry = await this.#get.update(tableName, params)
 
     return this.#exec<UpdateResponseType>(qry + `\nselect @@ROWCOUNT as rowsAffected`, params, true)
@@ -292,9 +328,9 @@ export default class DB implements DbProps {
    * @returns A promise that resolves to an object containing the number of affected rows ({rowsAffected}).
    */
   async delete(tableName: string, params: QueryParameters): Promise<UpdateResponseType> {
+    validateTableName(tableName)
     const qry = await this.#get.delete(tableName, params)
 
-    // TODO: Uncomment this line after testing
     return this.#exec<UpdateResponseType>(qry + `\nselect @@ROWCOUNT as rowsAffected`, params, true)
   }
 
@@ -307,6 +343,7 @@ export default class DB implements DbProps {
    */
 
   async insert<T = any>(tableName: string, params: QueryParameters): Promise<T> {
+    validateTableName(tableName)
     /** providing an object with identity column null fails because its trying to insert identity value
      *
      */
@@ -314,6 +351,24 @@ export default class DB implements DbProps {
     return this.#exec<T>(qry, params, true)
   }
 
+  /**
+   * Executes a query with dynamically added WHERE conditions.
+   *
+   * Appends additional WHERE conditions to an existing query based on the provided filter fields.
+   * Handles queries with existing WHERE clauses and preserves ORDER BY clauses.
+   *
+   * @template T - The expected return type
+   * @param query - The base SQL query to execute
+   * @param props - Parameters for the base query
+   * @param filterFields - Additional filter conditions to append as WHERE clauses
+   * @returns A promise resolving to the query results
+   *
+   * @example
+   * const baseQuery = "SELECT * FROM dbo.users ORDER BY id"
+   * const filters = { status: 'active', role: 'admin' }
+   * const results = await db.where(baseQuery, {}, filters)
+   * // Executes: SELECT * FROM dbo.users WHERE status = @_status AND role = @_role ORDER BY id
+   */
   async where<T = any>(
     query: string,
     props: QueryParameters,
@@ -347,6 +402,29 @@ export default class DB implements DbProps {
     return this.exec<T>(query, { ...props, ...filterFields })
   }
 
+  /**
+   * Executes a query and iterates over each result row with an async callback function.
+   *
+   * Useful for processing large result sets one row at a time with async operations,
+   * such as making API calls or database updates for each row.
+   *
+   * @template T - The expected row type
+   * @param query - The SQL query to execute
+   * @param params - Parameters for the query
+   * @param fun - Async callback function to process each row
+   * @returns A promise resolving to all rows after processing
+   *
+   * @example
+   * await db.for(
+   *   "SELECT * FROM dbo.users WHERE status = @_status",
+   *   { status: 'pending' },
+   *   async (user) => {
+   *     await sendEmail(user.email)
+   *     console.log(`Processed user ${user.id}`)
+   *     return user
+   *   }
+   * )
+   */
   async for<T = any>(
     query: string,
     params: QueryParameters | null | undefined,
@@ -363,13 +441,6 @@ export default class DB implements DbProps {
 
   #consoleLogError(props: DBErrorProps) {
     const { number, database, qry, message, params } = props
-
-    // if ([2627, 2601].includes(number)) {
-    //   // 2627 "primary-key-violation"
-    //   // 2601 "duplicate-key"
-    //   // console.info("consoleLogError includes return", );
-    //   return;
-    // }
 
     if (debug.enabled("db")) {
       console.info("\x1b[31m", `****************** MSSQL ERROR start ******************`)
@@ -400,24 +471,17 @@ export default class DB implements DbProps {
   ): Promise<void> {
     const data: any = await this.exec(qry, params)
 
-    // if(req instanceof Request){
     if (req.accepts("json")) {
-      // res.setHeader("Content-Type", "application/json");
       this.toJSON(req, res, data)
     } else if (req.accepts("text")) {
-      // res.setHeader("Content-Type", "text/plain");
       this.toTEXT(req, res, data)
     } else if (req.accepts("html")) {
-      // res.setHeader("Content-Type", "text/html");
       this.toTEXT(req, res, data)
     } else if (req.accepts("xml")) {
-      // res.setHeader("Content-Type", "application/zip");
-
       throw new Error("mssql feature of send function has not been implemented yet")
     } else {
       this.toJSON(req, res, data)
     }
-    // }
     return data
   }
 

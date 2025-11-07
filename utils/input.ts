@@ -2,6 +2,7 @@ import type { Request as MSSQLRequest } from "mssql";
 
 import sql from "mssql";
 import isNumber from "lodash-es/isNumber";
+import { SQL_INT_MAX, MIN_VARCHAR_LENGTH_FOR_NULL, VARCHAR_MAX_THRESHOLD } from "../constants";
 
 function isFloat(n: any) {
     return !Number.isNaN(n) && n.toString().indexOf(".") !== -1;
@@ -9,7 +10,7 @@ function isFloat(n: any) {
 const getVarcharLength = (val: any) => {
     try {
         const len = JSON.stringify(val)?.length;
-        if (len > 1000) {
+        if (len > VARCHAR_MAX_THRESHOLD) {
             return sql.MAX;
         }
         return len + 50;
@@ -32,9 +33,9 @@ export const inputBuilder = (req?: MSSQLRequest, _key?: string, value?: any) => 
             _value = null;
             sqlType =
                 sql.NVarChar(
-                    40
-                ); /** keep minimum length to 40 because isnull(@_date, sysdatetime()) truncates dates to this length */
-            type = "NVarChar(40)";
+                    MIN_VARCHAR_LENGTH_FOR_NULL
+                ); /** keep minimum length to prevent isnull(@_date, sysdatetime()) from truncating dates */
+            type = `NVarChar(${MIN_VARCHAR_LENGTH_FOR_NULL})`;
         } else if (_value.toString() === "0") {
             sqlType = sql.Int;
             type = "int";
@@ -45,7 +46,7 @@ export const inputBuilder = (req?: MSSQLRequest, _key?: string, value?: any) => 
                 // this.#consoleLog("param is float:::::::::::::", _key, _value)
                 sqlType = sql.Float;
                 type = "float";
-            } else if (_value > 2047483647) {
+            } else if (_value > SQL_INT_MAX) {
                 // this.#consoleLog("param is BigInt:::::::::::::", _key, _value);
                 sqlType = sql.BigInt;
                 type = "BigInt";
