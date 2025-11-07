@@ -11,6 +11,7 @@ import forEach from "lodash-es/forEach"
 import { inputBuilder } from "./utils/input"
 import { getOrderBy } from "./utils/move-orderby"
 import { parseMSSQLError } from "./utils/parse-error"
+import { validateTableName } from "./utils/validate-table-name"
 import {
   extractOpenJson,
   extractOpenJsonObjects,
@@ -278,6 +279,7 @@ export default class DB implements DbProps {
    * @returns A promise that resolves to an object containing the number of affected rows ({rowsAffected}).
    */
   async update(tableName: string, params: QueryParameters): Promise<UpdateResponseType> {
+    validateTableName(tableName)
     const qry = await this.#get.update(tableName, params)
 
     return this.#exec<UpdateResponseType>(qry + `\nselect @@ROWCOUNT as rowsAffected`, params, true)
@@ -292,6 +294,7 @@ export default class DB implements DbProps {
    * @returns A promise that resolves to an object containing the number of affected rows ({rowsAffected}).
    */
   async delete(tableName: string, params: QueryParameters): Promise<UpdateResponseType> {
+    validateTableName(tableName)
     const qry = await this.#get.delete(tableName, params)
 
     // TODO: Uncomment this line after testing
@@ -307,6 +310,7 @@ export default class DB implements DbProps {
    */
 
   async insert<T = any>(tableName: string, params: QueryParameters): Promise<T> {
+    validateTableName(tableName)
     /** providing an object with identity column null fails because its trying to insert identity value
      *
      */
