@@ -351,6 +351,24 @@ export default class DB implements DbProps {
     return this.#exec<T>(qry, params, true)
   }
 
+  /**
+   * Executes a query with dynamically added WHERE conditions.
+   *
+   * Appends additional WHERE conditions to an existing query based on the provided filter fields.
+   * Handles queries with existing WHERE clauses and preserves ORDER BY clauses.
+   *
+   * @template T - The expected return type
+   * @param query - The base SQL query to execute
+   * @param props - Parameters for the base query
+   * @param filterFields - Additional filter conditions to append as WHERE clauses
+   * @returns A promise resolving to the query results
+   *
+   * @example
+   * const baseQuery = "SELECT * FROM dbo.users ORDER BY id"
+   * const filters = { status: 'active', role: 'admin' }
+   * const results = await db.where(baseQuery, {}, filters)
+   * // Executes: SELECT * FROM dbo.users WHERE status = @_status AND role = @_role ORDER BY id
+   */
   async where<T = any>(
     query: string,
     props: QueryParameters,
@@ -384,6 +402,29 @@ export default class DB implements DbProps {
     return this.exec<T>(query, { ...props, ...filterFields })
   }
 
+  /**
+   * Executes a query and iterates over each result row with an async callback function.
+   *
+   * Useful for processing large result sets one row at a time with async operations,
+   * such as making API calls or database updates for each row.
+   *
+   * @template T - The expected row type
+   * @param query - The SQL query to execute
+   * @param params - Parameters for the query
+   * @param fun - Async callback function to process each row
+   * @returns A promise resolving to all rows after processing
+   *
+   * @example
+   * await db.for(
+   *   "SELECT * FROM dbo.users WHERE status = @_status",
+   *   { status: 'pending' },
+   *   async (user) => {
+   *     await sendEmail(user.email)
+   *     console.log(`Processed user ${user.id}`)
+   *     return user
+   *   }
+   * )
+   */
   async for<T = any>(
     query: string,
     params: QueryParameters | null | undefined,
