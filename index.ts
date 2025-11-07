@@ -100,9 +100,44 @@ export default class DB implements DbProps {
       ...rest,
     }
 
+    // Validate required connection parameters
+    this.#validateConnectionConfig()
+
     this.responseHeaders = responseHeaders || []
     this.tranHeader = tranHeader || `SET TRANSACTION ISOLATION LEVEL READ UNCOMMITTED` //  \nset nocount on; \n`;
     this.pool = null
+  }
+
+  /**
+   * Validates that required connection parameters are present
+   * @throws Error if required parameters are missing
+   */
+  #validateConnectionConfig(): void {
+    const required = ['database', 'user', 'password', 'server'] as const
+    const missing: string[] = []
+
+    for (const field of required) {
+      if (!this.config[field] || this.config[field].trim() === '') {
+        missing.push(field)
+      }
+    }
+
+    if (missing.length > 0) {
+      throw new Error(
+        `Missing required database connection parameters: ${missing.join(', ')}. ` +
+        `Please provide them in the constructor or set environment variables: ` +
+        missing.map(f => `DB_${f.toUpperCase()}`).join(', ')
+      )
+    }
+
+    // Security warning for trustServerCertificate
+    if (this.config.options?.trustServerCertificate === true) {
+      console.warn(
+        'WARNING: trustServerCertificate is set to true. ' +
+        'This disables certificate validation and may expose you to man-in-the-middle attacks. ' +
+        'Only use this setting in development environments with self-signed certificates.'
+      )
+    }
   }
 
   #reply(req: Request, res: Response, data: any) {
