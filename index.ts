@@ -17,6 +17,7 @@ import {
   extractOpenJsonObjects,
   generateOpenJsonQueryWithClause,
 } from "./utils/extract-openjson"
+import { DEFAULT_DEADLOCK_RETRIES, DEADLOCK_RETRY_DELAY_MS, DEFAULT_POOL_CONFIG } from "./constants"
 
 /** lodash */
 import type { DBErrorProps } from "./classes/DBError"
@@ -92,11 +93,7 @@ export default class DB implements DbProps {
         encrypt: false, // for azure
         trustServerCertificate: false, // change to true for local dev / self-signed certs
       },
-      pool: {
-        max: 100,
-        min: 0,
-        idleTimeoutMillis: 30000,
-      },
+      pool: DEFAULT_POOL_CONFIG,
       ...rest,
     }
 
@@ -245,8 +242,8 @@ export default class DB implements DbProps {
       return parsedRows as unknown as T
     } catch (err: any) {
       if (err.message.includes("deadlock") || err.message.includes("unknown reason")) {
-        if (retryCount < 5) {
-          await sleep(450)
+        if (retryCount < DEFAULT_DEADLOCK_RETRIES) {
+          await sleep(DEADLOCK_RETRY_DELAY_MS)
           return this.#exec<T>(query, params, optionsOrBoolean, retryCount + 1)
         }
       }
