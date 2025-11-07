@@ -332,7 +332,6 @@ export default class DB implements DbProps {
     validateTableName(tableName)
     const qry = await this.#get.delete(tableName, params)
 
-    // TODO: Uncomment this line after testing
     return this.#exec<UpdateResponseType>(qry + `\nselect @@ROWCOUNT as rowsAffected`, params, true)
   }
 
