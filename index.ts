@@ -402,13 +402,6 @@ export default class DB implements DbProps {
   #consoleLogError(props: DBErrorProps) {
     const { number, database, qry, message, params } = props
 
-    // if ([2627, 2601].includes(number)) {
-    //   // 2627 "primary-key-violation"
-    //   // 2601 "duplicate-key"
-    //   // console.info("consoleLogError includes return", );
-    //   return;
-    // }
-
     if (debug.enabled("db")) {
       console.info("\x1b[31m", `****************** MSSQL ERROR start ******************`)
 
@@ -438,24 +431,17 @@ export default class DB implements DbProps {
   ): Promise<void> {
     const data: any = await this.exec(qry, params)
 
-    // if(req instanceof Request){
     if (req.accepts("json")) {
-      // res.setHeader("Content-Type", "application/json");
       this.toJSON(req, res, data)
     } else if (req.accepts("text")) {
-      // res.setHeader("Content-Type", "text/plain");
       this.toTEXT(req, res, data)
     } else if (req.accepts("html")) {
-      // res.setHeader("Content-Type", "text/html");
       this.toTEXT(req, res, data)
     } else if (req.accepts("xml")) {
-      // res.setHeader("Content-Type", "application/zip");
-
       throw new Error("mssql feature of send function has not been implemented yet")
     } else {
       this.toJSON(req, res, data)
     }
-    // }
     return data
   }
 

@@ -1,5 +1,4 @@
 export function extractOpenJson(input: string): string[] {
-    // input = String(input).replaceAll(" ", "")
     const regex = /\b(?:in)\s*\(\s*@_(\w+)\s*\)/gi; // Match only after "in" or "openjson"
 
     const matches: string[] = [];
@@ -33,7 +32,6 @@ export const generateOpenJsonQueryWithClause = (data: any[], fieldName: string):
     }
 
     let withClause = "";
-    let selectColumns = "";
 
     if (typeof data[0] === "object" && data[0] !== null) {
         // Case: Array of Objects
@@ -57,9 +55,6 @@ export const generateOpenJsonQueryWithClause = (data: any[], fieldName: string):
         withClause = Object.entries(firstObject)
             .map(([key, value]) => `${key} ${getSqlType(value)} '$.${key}'`)
             .join(",\n ");
-
-        // Select fields
-        selectColumns = Object.keys(firstObject).join(", ");
     } else {
         // Case: Array of Primitive Values
         const valueType = typeof data[0];
@@ -72,15 +67,9 @@ export const generateOpenJsonQueryWithClause = (data: any[], fieldName: string):
         }
 
         withClause = `value ${sqlType} '$' `;
-        selectColumns = "value";
     }
 
     // Build the final SQL query
-    // return `SELECT ${selectColumns}
-    // FROM OPENJSON(@_${fieldName})
-    // WITH(
-    //   ${withClause}
-    // );
     return `
     WITH(
 ${withClause}
