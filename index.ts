@@ -188,14 +188,19 @@ export default class DB implements DbProps {
     // Normalize options (preserve old boolean behavior)
     const opts: Required<ExecOptions> = this.#normalizeExecOptions(optionsOrBoolean)
 
+    // Create a copy of params if we need to add default page value to avoid mutation
+    let effectiveParams = params
+    if (params?.limit && !params.page) {
+      effectiveParams = { ...params, page: 0 }
+    }
+
     let req: MSSQLRequest = this.pool.request()
-    if (params?.limit && !params.page) params.page = 0
-    req = this.#get.params(req, params)
+    req = this.#get.params(req, effectiveParams)
 
     // Build query (suppress auto paging if returning multiple sets)
     const query = this.#get.query(
       originalQuery,
-      params,
+      effectiveParams,
       opts.result === "sets" || opts.applyPaging === "never"
     )
 
