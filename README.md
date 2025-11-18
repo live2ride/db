@@ -12,6 +12,7 @@ A straightforward JavaScript library for interacting with MS SQL Server (MSSQL).
   - [Additional Configuration Options](#additional-configuration-options)
 - [Usage](#usage)
   - [Executing Queries](#executing-queries)
+  - [Transactions](#transactions)
 - [Examples](#examples)
   - [Create Table](#create-table)
   - [Select from Table](#select-from-table)
@@ -116,6 +117,42 @@ await db.exec(
   firstRowOnly   // Boolean (optional): If true, returns only the first row (default is false)
 );
 ```
+
+### Transactions
+
+Use the `transaction` method to execute multiple operations within a database transaction. The transaction automatically commits on success and rolls back on error.
+
+```javascript
+await db.transaction(async (tx) => {
+  // 1. Validate state transition
+  const payment = await tx.exec("SELECT * FROM dbo.payments WHERE id = @_id", { id: paymentId }, true);
+
+  if (!payment) {
+    throw new Error("Payment not found");
+  }
+
+  // 2. Update payment status
+  await tx.update("dbo.payments", {
+    id: paymentId,
+    status: "completed"
+  });
+
+  // 3. Insert audit log
+  await tx.insert("dbo.audit_logs", {
+    payment_id: paymentId,
+    action: "status_change",
+    new_status: "completed"
+  });
+
+  return payment;
+});
+```
+
+**Features:**
+- Automatic BEGIN/COMMIT/ROLLBACK handling
+- All DB methods available within transaction context: `exec`, `insert`, `update`, `delete`, `where`, `for`
+- Nested transactions are not supported and will throw an error
+- On error, the transaction is automatically rolled back
 
 ## Examples
 

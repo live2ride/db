@@ -62,6 +62,8 @@ export type DbPrint = {
   insert: (tableName: string, params: PlainObject) => Promise<string>
 }
 
+export type TransactionCallback<T> = (tx: DbProps) => Promise<T>
+
 export type DbProps = {
   exec: <T = unknown>(
     query: string,
@@ -69,6 +71,12 @@ export type DbProps = {
     optionsOrBoolean?: ExecOptions | boolean
   ) => Promise<T>
   send: (req: Request, res: Response, qry: string, params?: PlainObject | null) => Promise<void>
+  transaction: <T = unknown>(callback: TransactionCallback<T>) => Promise<T>
+  update: (tableName: string, params: PlainObject) => Promise<UpdateResponseType>
+  delete: (tableName: string, params: PlainObject) => Promise<UpdateResponseType>
+  insert: <T = unknown>(tableName: string, params: PlainObject) => Promise<T>
+  where: <T = unknown>(query: string, props: PlainObject, filterFields: PlainObject) => Promise<T | undefined>
+  for: <T = unknown>(query: string, params: PlainObject | null | undefined, fun: (row: T) => Promise<T>) => Promise<T>
   print: DbPrint
 }
 

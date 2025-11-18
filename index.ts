@@ -439,6 +439,255 @@ export default class DB implements DbProps {
     return rows
   }
 
+  /**
+   * Executes a callback within a database transaction.
+   * Automatically commits on success and rolls back on error.
+   *
+   * @template T - The expected return type from the callback
+   * @param callback - Async function that receives a transaction-scoped DB instance
+   * @returns A promise resolving to the callback's return value
+   *
+   * @example
+   * await db.transaction(async (tx) => {
+   *   const payment = await tx.exec("SELECT * FROM payments WHERE id = @_id", { id: 1 }, true)
+   *   await tx.update("payments", { id: 1, status: "completed" })
+   *   return payment
+   * })
+   */
+  async transaction<T = any>(
+    callback: (tx: DbProps) => Promise<T>
+  ): Promise<T> {
+    // Ensure pool is connected
+    if (!this.pool) {
+      const conPool = await new sql.ConnectionPool(this.config)
+      this.pool = await conPool.connect()
+    }
+
+    const transaction = new sql.Transaction(this.pool)
+
+    try {
+      // Begin transaction
+      await transaction.begin()
+
+      // Create transaction-scoped DB proxy
+      const txProxy = this.#createTransactionProxy(transaction)
+
+      // Execute callback with transaction proxy
+      const result = await callback(txProxy)
+
+      // Commit transaction
+      await transaction.commit()
+
+      return result
+    } catch (error) {
+      // Rollback on error
+      try {
+        await transaction.rollback()
+      } catch (rollbackError) {
+        console.error("Failed to rollback transaction:", rollbackError)
+      }
+      throw error
+    }
+  }
+
+  /**
+   * Creates a transaction-scoped DB proxy that uses the provided transaction
+   * for all database operations instead of the connection pool.
+   *
+   * @param transaction - The mssql Transaction object to use for operations
+   * @returns A proxy object with the same interface as DB but scoped to the transaction
+   */
+  #createTransactionProxy(transaction: any): DbProps {
+    const self = this
+
+    // Transaction-scoped exec that uses transaction.request() instead of pool.request()
+    const txExec = async <T = any>(
+      originalQuery: string,
+      params?: QueryParameters | null,
+      optionsOrBoolean?: ExecOptions | boolean,
+      retryCount = 0
+    ): Promise<T> => {
+      // Normalize options
+      const opts: Required<ExecOptions> = self.#normalizeExecOptions(optionsOrBoolean)
+
+      // Create a copy of params if needed
+      let effectiveParams = params
+      if (params?.limit && !params.page) {
+        effectiveParams = { ...params, page: 0 }
+      }
+
+      // Use transaction.request() instead of pool.request()
+      let req = transaction.request()
+      req = self.#get.params(req, effectiveParams)
+
+      // Build query
+      const query = self.#get.query(
+        originalQuery,
+        effectiveParams,
+        opts.result === "sets" || opts.applyPaging === "never"
+      )
+
+      // Build header + safe ROWCOUNT wrapping
+      let header = self.tranHeader
+      const applyRowcount = opts.rowcountOne || opts.result === "first" || optionsOrBoolean === true
+
+      if (applyRowcount) header += `\nSET ROWCOUNT 1;`
+
+      const sqlText = `${header}\n${query}\n${applyRowcount ? "SET ROWCOUNT 0;" : ""}`
+
+      try {
+        const result = await req.query(sqlText)
+
+        if (opts.result === "meta") {
+          if (!opts.parse) return result as unknown as T
+          const parsedSets = self.#parseRecordsets(result.recordsets)
+          return {
+            ...result,
+            recordsets: parsedSets,
+            recordset: parsedSets?.[0] ?? [],
+          } as unknown as T
+        }
+
+        if (opts.result === "sets") {
+          const sets = opts.parse ? self.#parseRecordsets(result.recordsets) : result.recordsets
+          return sets as unknown as T
+        }
+
+        const rows = result.recordsets?.[0] ?? []
+        const parsedRows = opts.parse ? self.#parseRows(rows) : rows
+
+        if (opts.result === "first" || opts.limit === 1) {
+          return (parsedRows?.[0] as T) ?? (undefined as unknown as T)
+        }
+
+        return parsedRows as unknown as T
+      } catch (err: any) {
+        if (err.message.includes("deadlock") || err.message.includes("unknown reason")) {
+          if (retryCount < DEFAULT_DEADLOCK_RETRIES) {
+            await sleep(DEADLOCK_RETRY_DELAY_MS)
+            return txExec<T>(query, params, optionsOrBoolean, retryCount + 1)
+          }
+        }
+
+        const hadFetchNext = (_sqlText: string): boolean => {
+          return /\bFETCH\s+NEXT\b/i.test(_sqlText)
+        }
+
+        const isNextUsageError = (_err: any): boolean => {
+          const msg = String(err?.message || "")
+          return err?.number === 153 || msg.includes("usage of the option NEXT")
+        }
+
+        const hadPaging = hadFetchNext(query)
+        if ((hadPaging || isNextUsageError(err)) && retryCount < 1) {
+          await txExec<T>(
+            originalQuery,
+            params,
+            { ...opts, applyPaging: "never", rowcountOne: true },
+            retryCount + 1
+          )
+        }
+
+        const error = parseMSSQLError(err, { query, params: params || {}, config: self.config })
+        self.#consoleLogError(error as DBErrorProps)
+        throw error
+      }
+    }
+
+    // Create proxy with all DB methods
+    const proxy: DbProps = {
+      exec: txExec,
+
+      async send(req, res, qry, params) {
+        const data: any = await txExec(qry, params)
+        if (req.accepts("json")) {
+          self.toJSON(req, res, data)
+        } else if (req.accepts("text")) {
+          self.toTEXT(req, res, data)
+        } else if (req.accepts("html")) {
+          self.toTEXT(req, res, data)
+        } else if (req.accepts("xml")) {
+          throw new Error("mssql feature of send function has not been implemented yet")
+        } else {
+          self.toJSON(req, res, data)
+        }
+        return data
+      },
+
+      async update(tableName: string, params: QueryParameters): Promise<UpdateResponseType> {
+        validateTableName(tableName)
+        const qry = await self.#get.update(tableName, params)
+        return txExec<UpdateResponseType>(qry + `\nselect @@ROWCOUNT as rowsAffected`, params, true)
+      },
+
+      async delete(tableName: string, params: QueryParameters): Promise<UpdateResponseType> {
+        validateTableName(tableName)
+        const qry = await self.#get.delete(tableName, params)
+        return txExec<UpdateResponseType>(qry + `\nselect @@ROWCOUNT as rowsAffected`, params, true)
+      },
+
+      async insert<T = any>(tableName: string, params: QueryParameters): Promise<T> {
+        validateTableName(tableName)
+        const qry = await self.#get.insert(tableName, params)
+        return txExec<T>(qry, params, true)
+      },
+
+      async where<T = any>(
+        query: string,
+        props: QueryParameters,
+        filterFields: QueryParameters
+      ): Promise<T | undefined> {
+        const whereClauses: string[] = []
+        if (filterFields) {
+          for (const [field, value] of Object.entries(filterFields)) {
+            if (isDefined(value)) {
+              whereClauses.push(`${field} = @_${field}`)
+            }
+          }
+          const hasWhere = /\bWHERE\b/i.test(query)
+
+          if (whereClauses.length > 0) {
+            const additionalWhere =
+              whereClauses.length > 1
+                ? `(${whereClauses.join(" AND ")})`
+                : whereClauses.join(" AND ")
+
+            const orderByClause = getOrderBy(query)
+            if (orderByClause) {
+              query = query.replace(orderByClause, "")
+            }
+            query += hasWhere ? ` AND ${additionalWhere}` : ` WHERE ${additionalWhere}`
+            query += ` ${orderByClause || ""}`
+          }
+        }
+        return txExec<T>(query, { ...props, ...filterFields })
+      },
+
+      async for<T = any>(
+        query: string,
+        params: QueryParameters | null | undefined,
+        fun: (row: T) => Promise<T>
+      ): Promise<T> {
+        const rows: any = await txExec<T>(query, params)
+        if (rows && rows?.length > 0) {
+          for (const r of rows) {
+            await fun(r)
+          }
+        }
+        return rows
+      },
+
+      // Nested transactions are not supported, so throw an error
+      async transaction() {
+        throw new Error("Nested transactions are not supported")
+      },
+
+      print: self.print,
+    }
+
+    return proxy
+  }
+
   #consoleLogError(props: DBErrorProps) {
     const { number, database, qry, message, params } = props
 
