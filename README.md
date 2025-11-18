@@ -122,6 +122,8 @@ await db.exec(
 
 Use the `transaction` method to execute multiple operations within a database transaction. The transaction automatically commits on success and rolls back on error.
 
+#### Basic Transaction
+
 ```javascript
 await db.transaction(async (tx) => {
   // 1. Validate state transition
@@ -148,11 +150,97 @@ await db.transaction(async (tx) => {
 });
 ```
 
+#### Advanced Transaction Options
+
+Transactions support advanced options for isolation levels, retries, timeouts, and hooks:
+
+```javascript
+await db.transaction(async (tx) => {
+  // Critical financial operation
+  await tx.exec("UPDATE accounts SET balance = balance - 100 WHERE id = @_id", { id: 1 });
+  await tx.exec("UPDATE accounts SET balance = balance + 100 WHERE id = @_id", { id: 2 });
+}, {
+  isolationLevel: "SERIALIZABLE",  // Prevent race conditions
+  maxRetries: 3,                   // Retry on deadlock
+  retryDelay: 100,                 // Initial delay: 100ms
+  retryBackoff: 2,                 // Double delay each retry
+  timeout: 30000,                  // 30 second timeout
+  name: "transfer-funds",          // For debugging
+  hooks: {
+    onBegin: (txId) => console.log(`Transaction ${txId} started`),
+    onCommit: (txId, duration) => console.log(`Transaction ${txId} committed in ${duration}ms`),
+    onRollback: (txId, error, duration) => console.error(`Transaction ${txId} rolled back after ${duration}ms:`, error)
+  }
+});
+```
+
+**Transaction Options:**
+
+- `isolationLevel` - Set transaction isolation level:
+  - `"READ UNCOMMITTED"` - Allows dirty reads (fastest, least safe)
+  - `"READ COMMITTED"` - Prevents dirty reads (default in SQL Server)
+  - `"REPEATABLE READ"` - Prevents dirty and non-repeatable reads
+  - `"SERIALIZABLE"` - Full isolation (slowest, most safe)
+  - `"SNAPSHOT"` - Uses row versioning to avoid blocking
+
+- `maxRetries` - Number of retry attempts on deadlock (default: 0)
+- `retryDelay` - Initial retry delay in milliseconds (default: 100)
+- `retryBackoff` - Multiply delay by this on each retry (default: 2)
+- `timeout` - Transaction timeout in milliseconds
+- `name` - Transaction name for debugging and logging
+- `hooks` - Event handlers for transaction lifecycle
+
+#### Savepoints
+
+Use savepoints for partial rollbacks within a transaction:
+
+```javascript
+await db.transaction(async (tx) => {
+  await tx.update("dbo.orders", { id: 1, status: "processing" });
+
+  // Create a savepoint
+  await tx.savepoint("before_payment");
+
+  try {
+    await tx.insert("dbo.payments", { order_id: 1, amount: 100 });
+    await tx.insert("dbo.payment_logs", { order_id: 1, message: "Payment processed" });
+  } catch (err) {
+    // Rollback only the payment operations, keep the order update
+    await tx.rollbackTo("before_payment");
+    console.error("Payment failed, but order status was updated");
+  }
+
+  // Transaction continues...
+  await tx.insert("dbo.audit_log", { order_id: 1, action: "processed" });
+});
+```
+
+#### Transaction Info
+
+Get information about the current transaction:
+
+```javascript
+await db.transaction(async (tx) => {
+  const info = tx.getTransactionInfo();
+  console.log(`Transaction ID: ${info.id}`);
+  console.log(`Started at: ${info.startTime}`);
+  console.log(`Isolation Level: ${info.isolationLevel}`);
+  console.log(`Is Active: ${info.isActive}`);
+
+  // Your transaction logic...
+});
+```
+
 **Features:**
 - Automatic BEGIN/COMMIT/ROLLBACK handling
-- All DB methods available within transaction context: `exec`, `insert`, `update`, `delete`, `where`, `for`
+- All DB methods available: `exec`, `insert`, `update`, `delete`, `where`, `for`
+- Configurable isolation levels
+- Automatic retry on deadlock with exponential backoff
+- Transaction timeout support
+- Savepoints for partial rollbacks
+- Lifecycle hooks for monitoring
+- Transaction state tracking
 - Nested transactions are not supported and will throw an error
-- On error, the transaction is automatically rolled back
 
 ## Examples
 

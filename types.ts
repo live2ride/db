@@ -62,6 +62,37 @@ export type DbPrint = {
   insert: (tableName: string, params: PlainObject) => Promise<string>
 }
 
+export type IsolationLevel =
+  | "READ UNCOMMITTED"
+  | "READ COMMITTED"
+  | "REPEATABLE READ"
+  | "SERIALIZABLE"
+  | "SNAPSHOT"
+
+export type TransactionHooks = {
+  onBegin?: (txId: string) => void | Promise<void>
+  onCommit?: (txId: string, duration: number) => void | Promise<void>
+  onRollback?: (txId: string, error: any, duration: number) => void | Promise<void>
+}
+
+export type TransactionOptions = {
+  isolationLevel?: IsolationLevel
+  name?: string
+  timeout?: number
+  maxRetries?: number
+  retryDelay?: number
+  retryBackoff?: number
+  hooks?: TransactionHooks
+}
+
+export type TransactionInfo = {
+  id: string
+  name?: string
+  startTime: Date
+  isolationLevel?: IsolationLevel
+  isActive: boolean
+}
+
 export type TransactionCallback<T> = (tx: DbProps) => Promise<T>
 
 export type DbProps = {
@@ -71,12 +102,16 @@ export type DbProps = {
     optionsOrBoolean?: ExecOptions | boolean
   ) => Promise<T>
   send: (req: Request, res: Response, qry: string, params?: PlainObject | null) => Promise<void>
-  transaction: <T = unknown>(callback: TransactionCallback<T>) => Promise<T>
+  transaction: <T = unknown>(callback: TransactionCallback<T>, options?: TransactionOptions) => Promise<T>
   update: (tableName: string, params: PlainObject) => Promise<UpdateResponseType>
   delete: (tableName: string, params: PlainObject) => Promise<UpdateResponseType>
   insert: <T = unknown>(tableName: string, params: PlainObject) => Promise<T>
   where: <T = unknown>(query: string, props: PlainObject, filterFields: PlainObject) => Promise<T | undefined>
   for: <T = unknown>(query: string, params: PlainObject | null | undefined, fun: (row: T) => Promise<T>) => Promise<T>
+  savepoint?: (name: string) => Promise<void>
+  rollbackTo?: (name: string) => Promise<void>
+  releaseSavepoint?: (name: string) => Promise<void>
+  getTransactionInfo?: () => TransactionInfo | undefined
   print: DbPrint
 }
 

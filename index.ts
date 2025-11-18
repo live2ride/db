@@ -28,11 +28,20 @@ import type {
   ExecOptions,
   QueryParameters,
   UpdateResponseType,
+  TransactionOptions,
+  TransactionInfo,
+  IsolationLevel,
 } from "./types"
 
 const isDefined = (value: any): boolean => Boolean(value) // const isDefined = (value: any): boolean => value !== undefined && value !== null;
 const sleep = async (ms: number): Promise<void> => {
   return new Promise((resolve) => setTimeout(resolve, ms))
+}
+
+// Generate unique transaction ID
+let txCounter = 0
+const generateTxId = (): string => {
+  return `tx_${Date.now()}_${++txCounter}`
 }
 
 type StorageType = {
@@ -440,22 +449,94 @@ export default class DB implements DbProps {
   }
 
   /**
-   * Executes a callback within a database transaction.
+   * Executes a callback within a database transaction with advanced options.
    * Automatically commits on success and rolls back on error.
    *
    * @template T - The expected return type from the callback
    * @param callback - Async function that receives a transaction-scoped DB instance
+   * @param options - Transaction configuration options
    * @returns A promise resolving to the callback's return value
    *
    * @example
+   * // Basic transaction
    * await db.transaction(async (tx) => {
    *   const payment = await tx.exec("SELECT * FROM payments WHERE id = @_id", { id: 1 }, true)
    *   await tx.update("payments", { id: 1, status: "completed" })
    *   return payment
    * })
+   *
+   * @example
+   * // Transaction with isolation level and retry
+   * await db.transaction(async (tx) => {
+   *   await tx.exec("UPDATE accounts SET balance = balance - 100 WHERE id = @_id", { id: 1 })
+   * }, {
+   *   isolationLevel: "SERIALIZABLE",
+   *   maxRetries: 3,
+   *   name: "transfer-funds"
+   * })
+   *
+   * @example
+   * // Transaction with savepoints
+   * await db.transaction(async (tx) => {
+   *   await tx.update("orders", { id: 1, status: "processing" })
+   *   await tx.savepoint("before_payment")
+   *   try {
+   *     await tx.insert("payments", { order_id: 1, amount: 100 })
+   *   } catch (err) {
+   *     await tx.rollbackTo("before_payment")
+   *   }
+   * })
    */
   async transaction<T = any>(
-    callback: (tx: DbProps) => Promise<T>
+    callback: (tx: DbProps) => Promise<T>,
+    options?: TransactionOptions
+  ): Promise<T> {
+    const opts: Required<TransactionOptions> = {
+      isolationLevel: options?.isolationLevel,
+      name: options?.name,
+      timeout: options?.timeout,
+      maxRetries: options?.maxRetries ?? 0,
+      retryDelay: options?.retryDelay ?? 100,
+      retryBackoff: options?.retryBackoff ?? 2,
+      hooks: options?.hooks ?? {},
+    }
+
+    let lastError: any
+    let attempt = 0
+
+    while (attempt <= opts.maxRetries) {
+      try {
+        return await this.#executeTransaction(callback, opts, attempt)
+      } catch (error: any) {
+        lastError = error
+
+        // Check if error is retryable (deadlock, timeout, etc.)
+        const isRetryable =
+          error.message?.includes("deadlock") ||
+          error.message?.includes("timeout") ||
+          error.number === 1205 // Deadlock error number
+
+        if (isRetryable && attempt < opts.maxRetries) {
+          const delay = opts.retryDelay * Math.pow(opts.retryBackoff, attempt)
+          await sleep(delay)
+          attempt++
+          continue
+        }
+
+        throw error
+      }
+    }
+
+    throw lastError
+  }
+
+  /**
+   * Internal method to execute a single transaction attempt
+   */
+  async #executeTransaction<T = any>(
+    callback: (tx: DbProps) => Promise<T>,
+    options: Required<TransactionOptions>,
+    attemptNumber: number
   ): Promise<T> {
     // Ensure pool is connected
     if (!this.pool) {
@@ -464,28 +545,98 @@ export default class DB implements DbProps {
     }
 
     const transaction = new sql.Transaction(this.pool)
+    const txId = generateTxId()
+    const startTime = new Date()
+
+    // Transaction info for tracking
+    const txInfo: TransactionInfo = {
+      id: txId,
+      name: options.name,
+      startTime,
+      isolationLevel: options.isolationLevel,
+      isActive: true,
+    }
 
     try {
+      // Set isolation level if specified
+      if (options.isolationLevel) {
+        const isolationLevelMap: Record<IsolationLevel, any> = {
+          "READ UNCOMMITTED": sql.ISOLATION_LEVEL.READ_UNCOMMITTED,
+          "READ COMMITTED": sql.ISOLATION_LEVEL.READ_COMMITTED,
+          "REPEATABLE READ": sql.ISOLATION_LEVEL.REPEATABLE_READ,
+          SERIALIZABLE: sql.ISOLATION_LEVEL.SERIALIZABLE,
+          SNAPSHOT: sql.ISOLATION_LEVEL.SNAPSHOT,
+        }
+        transaction.isolationLevel = isolationLevelMap[options.isolationLevel]
+      }
+
       // Begin transaction
       await transaction.begin()
 
-      // Create transaction-scoped DB proxy
-      const txProxy = this.#createTransactionProxy(transaction)
+      // Call onBegin hook
+      if (options.hooks.onBegin) {
+        await options.hooks.onBegin(txId)
+      }
 
-      // Execute callback with transaction proxy
-      const result = await callback(txProxy)
+      // Set timeout if specified
+      if (options.timeout) {
+        // Create timeout promise
+        const timeoutPromise = new Promise<never>((_, reject) => {
+          setTimeout(() => {
+            reject(new Error(`Transaction timeout after ${options.timeout}ms`))
+          }, options.timeout)
+        })
 
-      // Commit transaction
-      await transaction.commit()
+        // Race between callback and timeout
+        const txProxy = this.#createTransactionProxy(transaction, txInfo)
+        const resultPromise = callback(txProxy)
 
-      return result
+        const result = await Promise.race([resultPromise, timeoutPromise])
+
+        // Commit transaction
+        await transaction.commit()
+        txInfo.isActive = false
+
+        // Call onCommit hook
+        const duration = Date.now() - startTime.getTime()
+        if (options.hooks.onCommit) {
+          await options.hooks.onCommit(txId, duration)
+        }
+
+        return result as T
+      } else {
+        // Normal execution without timeout
+        const txProxy = this.#createTransactionProxy(transaction, txInfo)
+        const result = await callback(txProxy)
+
+        // Commit transaction
+        await transaction.commit()
+        txInfo.isActive = false
+
+        // Call onCommit hook
+        const duration = Date.now() - startTime.getTime()
+        if (options.hooks.onCommit) {
+          await options.hooks.onCommit(txId, duration)
+        }
+
+        return result
+      }
     } catch (error) {
+      txInfo.isActive = false
+
       // Rollback on error
       try {
         await transaction.rollback()
       } catch (rollbackError) {
         console.error("Failed to rollback transaction:", rollbackError)
       }
+
+      // Call onRollback hook
+      const duration = Date.now() - startTime.getTime()
+      if (options.hooks.onRollback) {
+        await options.hooks.onRollback(txId, error, duration)
+      }
+
       throw error
     }
   }
@@ -495,9 +646,10 @@ export default class DB implements DbProps {
    * for all database operations instead of the connection pool.
    *
    * @param transaction - The mssql Transaction object to use for operations
+   * @param txInfo - Transaction information for tracking
    * @returns A proxy object with the same interface as DB but scoped to the transaction
    */
-  #createTransactionProxy(transaction: any): DbProps {
+  #createTransactionProxy(transaction: any, txInfo: TransactionInfo): DbProps {
     const self = this
 
     // Transaction-scoped exec that uses transaction.request() instead of pool.request()
@@ -680,6 +832,43 @@ export default class DB implements DbProps {
       // Nested transactions are not supported, so throw an error
       async transaction() {
         throw new Error("Nested transactions are not supported")
+      },
+
+      /**
+       * Creates a savepoint within the current transaction.
+       * Allows partial rollback to this point if needed.
+       */
+      async savepoint(name: string): Promise<void> {
+        const req = transaction.request()
+        await req.query(`SAVE TRANSACTION ${name}`)
+      },
+
+      /**
+       * Rolls back the transaction to a previously created savepoint.
+       * Does not abort the entire transaction.
+       */
+      async rollbackTo(name: string): Promise<void> {
+        const req = transaction.request()
+        await req.query(`ROLLBACK TRANSACTION ${name}`)
+      },
+
+      /**
+       * Releases a savepoint (not commonly used in SQL Server, but included for completeness).
+       * In SQL Server, savepoints are automatically released when the transaction commits.
+       */
+      async releaseSavepoint(name: string): Promise<void> {
+        // SQL Server doesn't have explicit RELEASE SAVEPOINT, but we include this for API completeness
+        // Savepoints are automatically released on commit
+        console.warn(
+          `SQL Server does not support explicit RELEASE SAVEPOINT. Savepoint '${name}' will be released on commit.`
+        )
+      },
+
+      /**
+       * Returns information about the current transaction.
+       */
+      getTransactionInfo(): TransactionInfo | undefined {
+        return { ...txInfo }
       },
 
       print: self.print,
